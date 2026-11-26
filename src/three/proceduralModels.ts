@@ -1129,8 +1129,8 @@ export function buildHeroModel(
     bodyRoot.add(legPivot);
     return legPivot;
   };
-  const legL = makeLeg(-0.15, 'LeftUpperLeg');
-  const legR = makeLeg(0.15, 'RightUpperLeg');
+  const legL = makeLeg(0.15, 'LeftUpperLeg');
+  const legR = makeLeg(-0.15, 'RightUpperLeg');
 
   // Torso
   const torso = new THREE.Mesh(new THREE.CylinderGeometry(0.26, 0.22, 0.58, 12), tunicMat);
@@ -1513,8 +1513,8 @@ export function buildProceduralNpcRig(styleTint?: string): HeroRig {
     bodyRoot.add(legPivot);
     return legPivot;
   };
-  const legL = makeFoot(-0.12, 'LeftUpperLeg');
-  const legR = makeFoot(0.12, 'RightUpperLeg');
+  const legL = makeFoot(0.12, 'LeftUpperLeg');
+  const legR = makeFoot(-0.12, 'RightUpperLeg');
 
   const spinePivot = new THREE.Group();
   spinePivot.name = 'Spine';

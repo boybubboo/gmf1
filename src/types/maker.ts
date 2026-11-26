@@ -364,6 +364,8 @@ export interface CustomAssetMeta {
   defaultPickupItemId?: string;
   defaultLoot?: string;
   defaultSlotPresets?: Partial<Record<CustomClipSlot, string>>;
+  attachBodyPart?: ObjectAttachBodyPart;
+  linkedInventoryItemId?: string;
   groundOffset: number;
   defaultScale: number;
   animSpeed: number;
@@ -556,6 +558,8 @@ export interface ObjectMakerDoc {
   vertexPaintStrokes?: VertexPaintStroke[];
   interactionAttributes?: ObjectInteractionAttributeId[];
   interactionCalibrations?: Partial<Record<ObjectInteractionAttributeId, ObjectInteractionCalibration>>;
+  attachBodyPart?: ObjectAttachBodyPart;
+  linkedInventoryItemId?: string;
 }
 
 export interface ExportedAssetBundle {
@@ -2249,6 +2253,21 @@ export type InventoryItemCategory =
   | 'material';
 export type ToolActionKind = 'sword' | 'axe' | 'fishingPole' | 'torch';
 export type WearSlot = 'head' | 'body' | 'accessory' | 'offhand';
+export type ObjectAttachBodyPart =
+  | 'rightHand'
+  | 'leftHand'
+  | 'head'
+  | 'chest'
+  | 'back'
+  | 'neck'
+  | 'hips'
+  | 'leftArm'
+  | 'rightArm'
+  | 'leftFoot'
+  | 'rightFoot'
+  | 'leftWing'
+  | 'rightWing'
+  | 'tail';
 export type ItemRarity = 'common' | 'uncommon' | 'rare' | 'epic' | 'legendary';
 export type PickupMeshKind =
   | 'sword'
@@ -2303,6 +2322,8 @@ export interface InventoryItemDef {
   lore?: string;
   magicEffect?: string;
   meshKind: PickupMeshKind;
+  customAssetId?: string;
+  attachBodyPart?: ObjectAttachBodyPart;
   toolKind?: ToolActionKind;
   handedness?: 'oneHand' | 'twoHand';
   wearSlot?: WearSlot;

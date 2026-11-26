@@ -1,7 +1,16 @@
 import * as THREE from 'three';
-import type { InventoryItemDef, RigBoneRole, VisualStyleId } from '../types/maker';
-import type { CustomModelInstance } from './gltfAssetManager';
+import * as SkeletonUtils from 'three/addons/utils/SkeletonUtils.js';
+import type {
+  CustomAssetMeta,
+  InventoryItemDef,
+  ObjectAttachBodyPart,
+  RigBoneRole,
+  VisualStyleId,
+} from '../types/maker';
+import { getCachedAssetSync, type CustomModelInstance } from './gltfAssetManager';
 import { applyBotwStyleToObject } from './botwStyleUtils';
+import { buildPickupItemMesh, type BaddieRig, type HeroRig } from './proceduralModels';
+import type { QuadrupedMonsterRig } from './quadrupedMonsterBuilder';
 
 export interface HeroEquipmentHandles {
   handGripL?: THREE.Object3D;
@@ -1249,3 +1258,504 @@ export function syncHeroEquipmentVisuals(
     }
   }
 }
+
+export const OBJECT_BODY_PART_OPTIONS: {
+  id: ObjectAttachBodyPart;
+  label: string;
+  short: string;
+}[] = [
+  { id: 'rightHand', label: 'Right Hand (Main Hand)', short: 'Right Hand' },
+  { id: 'leftHand', label: 'Left Hand (Off-Hand)', short: 'Left Hand' },
+  { id: 'head', label: 'Head / Skull', short: 'Head' },
+  { id: 'chest', label: 'Chest / Torso', short: 'Chest' },
+  { id: 'back', label: 'Back / Shoulders', short: 'Back' },
+  { id: 'neck', label: 'Neck / Collar', short: 'Neck' },
+  { id: 'hips', label: 'Hips / Waist', short: 'Hips' },
+  { id: 'leftArm', label: 'Left Arm / Forearm', short: 'Left Arm' },
+  { id: 'rightArm', label: 'Right Arm / Forearm', short: 'Right Arm' },
+  { id: 'leftFoot', label: 'Left Foot / Boot', short: 'Left Foot' },
+  { id: 'rightFoot', label: 'Right Foot / Boot', short: 'Right Foot' },
+  { id: 'leftWing', label: 'Left Wing (Creatures)', short: 'Left Wing' },
+  { id: 'rightWing', label: 'Right Wing (Creatures)', short: 'Right Wing' },
+  { id: 'tail', label: 'Tail (Creatures & Monsters)', short: 'Tail' },
+];
+
+export const OBJECT_BODY_PART_LABELS: Record<ObjectAttachBodyPart, string> =
+  OBJECT_BODY_PART_OPTIONS.reduce(
+    (acc, opt) => {
+      acc[opt.id] = opt.short;
+      return acc;
+    },
+    {} as Record<ObjectAttachBodyPart, string>
+  );
+
+export function resolveItemAttachBodyPart(
+  item: InventoryItemDef | null | undefined,
+  customAssets?: CustomAssetMeta[]
+): ObjectAttachBodyPart | null {
+  if (!item) return null;
+  if (item.attachBodyPart) return item.attachBodyPart;
+  if (item.customAssetId && customAssets) {
+    const meta = customAssets.find((a) => a.id === item.customAssetId);
+    if (meta?.attachBodyPart) return meta.attachBodyPart;
+  }
+  if (item.toolKind) return 'rightHand';
+  if (item.wearSlot === 'offhand') return 'leftHand';
+  if (item.wearSlot === 'head') return 'head';
+  if (item.wearSlot === 'body') return 'back';
+  if (item.wearSlot === 'accessory') return 'neck';
+  return null;
+}
+
+function disposeAttachedGroup(group: THREE.Object3D | null | undefined) {
+  if (!group) return;
+  group.parent?.remove(group);
+  group.traverse((obj) => {
+    const mesh = obj as THREE.Mesh;
+    if (mesh.geometry) {
+      mesh.geometry.dispose();
+    }
+    if (mesh.material) {
+      const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+      for (const m of mats) {
+        m.dispose();
+      }
+    }
+  });
+}
+
+function clearNativeHeroRigEquipment(heroRig: HeroRig | undefined) {
+  if (!heroRig) return;
+  if (heroRig.sword) heroRig.sword.visible = false;
+  if (heroRig.axe) heroRig.axe.visible = false;
+  if (heroRig.fishingPole) heroRig.fishingPole.visible = false;
+  if (heroRig.torch) {
+    heroRig.torch.visible = false;
+    const torchLight = heroRig.torch.userData.torchLight as THREE.PointLight | undefined;
+    if (torchLight) torchLight.intensity = 0;
+  }
+  if (heroRig.heldGeneric) heroRig.heldGeneric.visible = false;
+  if (heroRig.shield) heroRig.shield.visible = false;
+  if (heroRig.wearHeadHat) heroRig.wearHeadHat.visible = false;
+  if (heroRig.wearHeadCrown) heroRig.wearHeadCrown.visible = false;
+  if (heroRig.wearBodyCloak) heroRig.wearBodyCloak.visible = false;
+  if (heroRig.wearAccessoryAmulet) heroRig.wearAccessoryAmulet.visible = false;
+}
+
+function findNamedBoneInRoot(
+  root: THREE.Object3D,
+  patterns: RegExp[],
+  exclude?: RegExp
+): THREE.Object3D | null {
+  const candidates: THREE.Object3D[] = [];
+  root.traverse((obj) => {
+    if (!obj.name) return;
+    if (exclude && exclude.test(obj.name)) return;
+    candidates.push(obj);
+  });
+  for (const pat of patterns) {
+    const boneHit = candidates.find((c) => (c as THREE.Bone).isBone && pat.test(c.name));
+    if (boneHit) return boneHit;
+    const objHit = candidates.find((c) => pat.test(c.name));
+    if (objHit) return objHit;
+  }
+  return null;
+}
+
+function resolveAttachmentBone(
+  runtime: {
+    instance: CustomModelInstance;
+    heroRig?: HeroRig;
+    baddieRig?: BaddieRig;
+    quadrupedRig?: QuadrupedMonsterRig;
+    customEquipmentHandles?: HeroEquipmentHandles | null;
+  },
+  part: ObjectAttachBodyPart
+): THREE.Object3D {
+  const root = runtime.instance.modelRoot;
+  const rig = runtime.instance.proceduralRig;
+  const heroRig = runtime.heroRig;
+  const baddieRig = runtime.baddieRig;
+  const customHandles = runtime.customEquipmentHandles;
+
+  switch (part) {
+    case 'rightHand':
+      return (
+        heroRig?.handGripR ??
+        customHandles?.handGripR ??
+        resolveRoleBone(runtime.instance, 'rightHand') ??
+        heroRig?.forearmR ??
+        baddieRig?.armR ??
+        rig?.getRoleBoneNode('rightLowerArm') ??
+        rig?.getRoleBoneNode('rightUpperArm') ??
+        findNamedBoneInRoot(root, [/claw.*r|front.*right|right.*paw|mouthanchor/i]) ??
+        root
+      );
+    case 'leftHand':
+      return (
+        heroRig?.handGripL ??
+        customHandles?.handGripL ??
+        resolveRoleBone(runtime.instance, 'leftHand') ??
+        heroRig?.forearmL ??
+        baddieRig?.armL ??
+        rig?.getRoleBoneNode('leftLowerArm') ??
+        rig?.getRoleBoneNode('leftUpperArm') ??
+        findNamedBoneInRoot(root, [/claw.*l|front.*left|left.*paw/i]) ??
+        root
+      );
+    case 'head':
+      return (
+        heroRig?.head ??
+        baddieRig?.head ??
+        rig?.getRoleBoneNode('head') ??
+        resolveRoleBone(runtime.instance, 'head') ??
+        findNamedBoneInRoot(root, [/monsterhead|head/i], /hat|hair|eye|jaw|end/i) ??
+        root
+      );
+    case 'neck':
+      return (
+        rig?.getRoleBoneNode('neck') ??
+        resolveRoleBone(runtime.instance, 'neck') ??
+        findNamedBoneInRoot(root, [/neck/i]) ??
+        rig?.getRoleBoneNode('chest') ??
+        heroRig?.spinePivot ??
+        baddieRig?.torso ??
+        root
+      );
+    case 'chest':
+    case 'back':
+      return (
+        rig?.getRoleBoneNode('chest') ??
+        resolveRoleBone(runtime.instance, 'chest') ??
+        heroRig?.torso ??
+        baddieRig?.torso ??
+        heroRig?.spinePivot ??
+        rig?.getRoleBoneNode('spine') ??
+        findNamedBoneInRoot(root, [/monsterchest|chest|torso|spine/i]) ??
+        root
+      );
+    case 'hips':
+      return (
+        rig?.getRoleBoneNode('hips') ??
+        resolveRoleBone(runtime.instance, 'hips') ??
+        heroRig?.bodyPivot ??
+        baddieRig?.bodyPivot ??
+        findNamedBoneInRoot(root, [/monsterhips|monsterbodypivot|hips|pelvis/i]) ??
+        root
+      );
+    case 'leftArm':
+      return (
+        heroRig?.forearmL ??
+        heroRig?.armL ??
+        baddieRig?.armL ??
+        rig?.getRoleBoneNode('leftLowerArm') ??
+        rig?.getRoleBoneNode('leftUpperArm') ??
+        root
+      );
+    case 'rightArm':
+      return (
+        heroRig?.forearmR ??
+        heroRig?.armR ??
+        baddieRig?.armR ??
+        rig?.getRoleBoneNode('rightLowerArm') ??
+        rig?.getRoleBoneNode('rightUpperArm') ??
+        root
+      );
+    case 'leftFoot':
+      return (
+        findNamedBoneInRoot(root, [/(left|l)[_.\-\s]*(foot|ankle|toe|paw|hoof)/i], /end|tip/i) ??
+        rig?.getRoleBoneNode('leftLowerLeg') ??
+        rig?.getRoleBoneNode('leftUpperLeg') ??
+        heroRig?.legL ??
+        root
+      );
+    case 'rightFoot':
+      return (
+        findNamedBoneInRoot(root, [/(right|r)[_.\-\s]*(foot|ankle|toe|paw|hoof)/i], /end|tip/i) ??
+        rig?.getRoleBoneNode('rightLowerLeg') ??
+        rig?.getRoleBoneNode('rightUpperLeg') ??
+        heroRig?.legR ??
+        root
+      );
+    case 'leftWing':
+      return (
+        baddieRig?.wingL ??
+        findNamedBoneInRoot(root, [/left.*wing|wing.*l|wingl/i]) ??
+        heroRig?.armL ??
+        rig?.getRoleBoneNode('chest') ??
+        root
+      );
+    case 'rightWing':
+      return (
+        baddieRig?.wingR ??
+        findNamedBoneInRoot(root, [/right.*wing|wing.*r|wingr/i]) ??
+        heroRig?.armR ??
+        rig?.getRoleBoneNode('chest') ??
+        root
+      );
+    case 'tail':
+      return (
+        findNamedBoneInRoot(root, [/tail/i]) ??
+        heroRig?.bodyPivot ??
+        baddieRig?.bodyPivot ??
+        rig?.getRoleBoneNode('hips') ??
+        root
+      );
+  }
+}
+
+function buildNormalizedAttachmentMesh(
+  item: InventoryItemDef,
+  part: ObjectAttachBodyPart,
+  charScale: number,
+  visualStyle: VisualStyleId,
+  targetBoneName: string
+): THREE.Group {
+  const wrapper = new THREE.Group();
+  wrapper.name = 'StudioInventoryAttachment';
+
+  let content: THREE.Group | null = null;
+  if (item.customAssetId) {
+    const cached = getCachedAssetSync(item.customAssetId);
+    if (cached) {
+      content = SkeletonUtils.clone(cached.scene) as THREE.Group;
+    }
+  }
+  if (!content) {
+    content = buildPickupItemMesh(item.meshKind, item.wearColorHex ?? item.colorHex);
+    content.position.set(0, 0, 0);
+    content.userData.floatSpin = false;
+  }
+
+  content.updateMatrixWorld(true);
+  const box = new THREE.Box3().setFromObject(content);
+  const size = new THREE.Vector3(0.4, 0.4, 0.4);
+  const center = new THREE.Vector3();
+  if (!box.isEmpty()) {
+    box.getSize(size);
+    box.getCenter(center);
+  }
+  const maxDim = Math.max(0.08, size.x, size.y, size.z);
+  const desiredMeters =
+    item.meshKind === 'fishingPole'
+      ? 1.15
+      : item.meshKind === 'sword' || item.meshKind === 'axe' || item.meshKind === 'staff'
+      ? 0.72
+      : part === 'back'
+      ? 0.56
+      : part === 'head'
+      ? 0.44
+      : 0.38;
+  const normScale = (desiredMeters * charScale) / maxDim;
+
+  const normalized = new THREE.Group();
+  normalized.scale.setScalar(normScale);
+  content.position.set(-center.x, -box.min.y, -center.z);
+  normalized.add(content);
+
+  // Orient cleanly based on target body part
+  switch (part) {
+    case 'rightHand':
+      normalized.rotation.set(Math.PI * 0.42, 0, 0);
+      normalized.position.set(0, 0, 0.04 * charScale);
+      break;
+    case 'leftHand':
+      normalized.rotation.set(Math.PI * 0.42, 0, 0);
+      normalized.position.set(0, 0, 0.04 * charScale);
+      break;
+    case 'head':
+      normalized.position.set(0, 0.22 * charScale, 0);
+      break;
+    case 'neck':
+      normalized.position.set(0, -0.02 * charScale, 0.16 * charScale);
+      break;
+    case 'chest':
+      normalized.position.set(0, 0.06 * charScale, 0.2 * charScale);
+      break;
+    case 'back':
+      normalized.position.set(0, 0.08 * charScale, -0.24 * charScale);
+      normalized.rotation.set(-0.18, Math.PI, 0);
+      break;
+    case 'hips':
+      normalized.position.set(0.22 * charScale, 0, 0.04 * charScale);
+      break;
+    case 'leftArm':
+      normalized.position.set(0.08 * charScale, -0.06 * charScale, 0);
+      break;
+    case 'rightArm':
+      normalized.position.set(-0.08 * charScale, -0.06 * charScale, 0);
+      break;
+    case 'leftFoot':
+    case 'rightFoot': {
+      const isHipOrUpperLeg = /upperleg|thigh/i.test(targetBoneName);
+      const isLowerLeg = /lowerleg|shin|calf|knee/i.test(targetBoneName);
+      const footY = isHipOrUpperLeg
+        ? -0.42 * charScale
+        : isLowerLeg
+        ? -0.32 * charScale
+        : -0.04 * charScale;
+      normalized.position.set(0, footY, 0.08 * charScale);
+      break;
+    }
+    case 'leftWing':
+    case 'rightWing':
+      normalized.position.set(0, 0.06 * charScale, -0.06 * charScale);
+      break;
+    case 'tail':
+      normalized.position.set(0, 0.02 * charScale, -0.14 * charScale);
+      break;
+  }
+
+  wrapper.add(normalized);
+  applyBotwStyleToObject(wrapper, visualStyle);
+  return wrapper;
+}
+
+export function applyStudioInventoryAttachment(opts: {
+  runtime: {
+    descriptor: { target: { kind: string } };
+    instance: CustomModelInstance;
+    boundsSize: THREE.Vector3;
+    heroRig?: HeroRig;
+    baddieRig?: BaddieRig;
+    quadrupedRig?: QuadrupedMonsterRig;
+    customEquipmentHandles?: HeroEquipmentHandles | null;
+    studioAttachedGroup?: THREE.Group | null;
+  };
+  item: InventoryItemDef | null;
+  customAssets: CustomAssetMeta[];
+  visualStyle: VisualStyleId;
+}): void {
+  const { runtime, item, customAssets, visualStyle } = opts;
+
+  if (runtime.studioAttachedGroup) {
+    disposeAttachedGroup(runtime.studioAttachedGroup);
+    runtime.studioAttachedGroup = null;
+  }
+
+  clearNativeHeroRigEquipment(runtime.heroRig);
+  if (runtime.customEquipmentHandles) {
+    syncHeroEquipmentVisuals(runtime.customEquipmentHandles, {
+      heldDef: null,
+      offhandDef: null,
+      headDef: null,
+      bodyDef: null,
+      accDef: null,
+      isSwimming: false,
+      isAttacking: false,
+      isFishingActive: false,
+    });
+  }
+
+  if (!item) return;
+
+  const part = resolveItemAttachBodyPart(item, customAssets);
+  if (!part) return;
+
+  const isCustomGlbActor = runtime.descriptor.target.kind === 'customAsset';
+  const matchesNativeSlot =
+    !item.customAssetId &&
+    ((part === 'rightHand' && Boolean(item.toolKind)) ||
+      (part === 'leftHand' && item.wearSlot === 'offhand') ||
+      (part === 'head' && item.wearSlot === 'head') ||
+      (part === 'back' && item.wearSlot === 'body') ||
+      (part === 'neck' && item.wearSlot === 'accessory'));
+
+  if (isCustomGlbActor && matchesNativeSlot) {
+    if (!runtime.customEquipmentHandles) {
+      runtime.customEquipmentHandles = attachEquipmentToCustomModel(
+        runtime.instance,
+        visualStyle
+      );
+    }
+    syncHeroEquipmentVisuals(runtime.customEquipmentHandles, {
+      heldDef: part === 'rightHand' ? item : null,
+      offhandDef: part === 'leftHand' ? item : null,
+      headDef: part === 'head' ? item : null,
+      bodyDef: part === 'back' ? item : null,
+      accDef: part === 'neck' ? item : null,
+      isSwimming: false,
+      isAttacking: false,
+      isFishingActive: false,
+    });
+    return;
+  }
+
+  const heroRig = runtime.heroRig;
+  const hasBuiltInHeroHandles = Boolean(
+    heroRig &&
+      (heroRig.sword ||
+        heroRig.shield ||
+        heroRig.wearHeadHat ||
+        heroRig.wearHeadCrown ||
+        heroRig.wearBodyCloak ||
+        heroRig.wearAccessoryAmulet)
+  );
+  if (hasBuiltInHeroHandles && heroRig && matchesNativeSlot) {
+    if (part === 'rightHand') {
+      if (item.toolKind === 'sword' && heroRig.sword) heroRig.sword.visible = true;
+      else if (item.toolKind === 'axe' && heroRig.axe) heroRig.axe.visible = true;
+      else if (item.toolKind === 'fishingPole' && heroRig.fishingPole)
+        heroRig.fishingPole.visible = true;
+      else if (item.toolKind === 'torch' && heroRig.torch) {
+        heroRig.torch.visible = true;
+        const tl = heroRig.torch.userData.torchLight as THREE.PointLight | undefined;
+        if (tl) tl.intensity = 5.2;
+      }
+      return;
+    }
+    if (part === 'leftHand' && heroRig.shield) {
+      heroRig.shield.visible = true;
+      applyTintToHandle(heroRig.shield, item.wearColorHex ?? item.colorHex);
+      return;
+    }
+    if (part === 'head') {
+      const isCrown =
+        item.id === 'golden_crown' || /\bcrown\b/i.test(item.name);
+      if (isCrown && heroRig.wearHeadCrown) {
+        heroRig.wearHeadCrown.visible = true;
+        applyTintToHandle(heroRig.wearHeadCrown, item.wearColorHex ?? item.colorHex);
+        return;
+      }
+      if (!isCrown && heroRig.wearHeadHat) {
+        heroRig.wearHeadHat.visible = true;
+        applyTintToHandle(heroRig.wearHeadHat, item.wearColorHex ?? item.colorHex);
+        return;
+      }
+    }
+    if (part === 'back' && heroRig.wearBodyCloak) {
+      heroRig.wearBodyCloak.visible = true;
+      applyTintToHandle(heroRig.wearBodyCloak, item.wearColorHex ?? item.colorHex);
+      return;
+    }
+    if (part === 'neck' && heroRig.wearAccessoryAmulet) {
+      heroRig.wearAccessoryAmulet.visible = true;
+      applyTintToHandle(heroRig.wearAccessoryAmulet, item.wearColorHex ?? item.colorHex);
+      return;
+    }
+  }
+
+  // Universal direct bone attachment for any custom object, NPC, buddy, baddie, monster, or custom body part
+  const targetBone = resolveAttachmentBone(runtime, part);
+  const charHeight = Math.max(0.75, runtime.boundsSize.y || 1.65);
+  const charScale = THREE.MathUtils.clamp(charHeight / 1.65, 0.55, 2.2);
+
+  targetBone.updateWorldMatrix(true, false);
+  targetBone.matrixWorld.decompose(_v, _q, _s);
+  const avgBoneScale = Math.max(
+    0.0001,
+    (Math.abs(_s.x) + Math.abs(_s.y) + Math.abs(_s.z)) / 3
+  );
+
+  const attached = buildNormalizedAttachmentMesh(
+    item,
+    part,
+    charScale,
+    visualStyle,
+    targetBone.name ?? ''
+  );
+  attached.scale.setScalar(1 / avgBoneScale);
+  targetBone.add(attached);
+  runtime.studioAttachedGroup = attached;
+}
+

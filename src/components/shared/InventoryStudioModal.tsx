@@ -9,6 +9,7 @@ import {
   Sparkles,
   Sprout,
   Trash2,
+  Wrench,
   X,
 } from 'lucide-react';
 import {
@@ -29,11 +30,16 @@ import type {
   InventoryStatProfile,
   ItemMetadata,
   ItemRarity,
+  ObjectAttachBodyPart,
   PickupMeshKind,
   ToolActionKind,
   WearSlot,
   WorldCollectibleRule,
 } from '../../types/maker';
+import {
+  OBJECT_BODY_PART_OPTIONS,
+  resolveItemAttachBodyPart,
+} from '../../three/heroEquipmentAttachments';
 import { uid } from '../../utils/terrain';
 import { ItemThumbnailArt } from './ItemThumbnailArt';
 
@@ -816,6 +822,43 @@ export const InventoryStudioModal: React.FC<{
                             ))}
                         </select>
                       </div>
+                    </div>
+
+                    {/* Character Body Part Attachment */}
+                    <div className="flex flex-wrap items-end gap-2.5 p-3 rounded-lg bg-[#0E131E] border border-white/8">
+                      <div className="flex-1 min-w-[200px] space-y-1">
+                        <label className="text-[10px] font-bold uppercase text-[#94A3B8]">
+                          Attach Body Part (Motion Studio)
+                        </label>
+                        <select
+                          value={
+                            resolveItemAttachBodyPart(selectedItem, store.customAssets) ?? ''
+                          }
+                          onChange={(e) =>
+                            patchSelectedItem({
+                              attachBodyPart: e.target.value
+                                ? (e.target.value as ObjectAttachBodyPart)
+                                : undefined,
+                            })
+                          }
+                          className="w-full px-2.5 py-1.5 rounded-lg bg-[#161C2B] border border-white/10 text-xs font-semibold"
+                        >
+                          <option value="">Unassigned (Assign in Object Editor)</option>
+                          {OBJECT_BODY_PART_OPTIONS.map((opt) => (
+                            <option key={opt.id} value={opt.id}>
+                              {opt.label}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => store.openObjectMakerForInventoryItem(selectedItem.id)}
+                        className="px-3 py-1.5 rounded-lg bg-[#7C5CFF] hover:bg-[#6A48F5] text-white text-xs font-bold inline-flex items-center gap-1.5 whitespace-nowrap"
+                      >
+                        <Wrench size={12} />
+                        <span>Open in Object Editor</span>
+                      </button>
                     </div>
 
                     {/* Contextual Fields by Type */}

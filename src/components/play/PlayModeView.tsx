@@ -9208,29 +9208,138 @@ export const PlayModeView: React.FC<{ store: MakerStore }> = ({ store }) => {
                     rt.motionBlend = THREE.MathUtils.damp(rt.motionBlend, 0, 14, dt);
                     if (rt.motionBlend <= 0.02) rt.motionKey = '';
                   }
-                } else if (rt.creatureHeroRig && customNpcPreset) {
-                  // Overlay custom Buddy Critter motion preset on top of creature rig
-                  const pKey = `${npcSlot}:${customNpcPreset.id}`;
-                  if (rt.motionKey !== pKey) {
-                    rt.motionKey = pKey;
-                    rt.motionElapsed = 0;
-                  }
-                  rt.motionBlend = THREE.MathUtils.damp(rt.motionBlend, 1, 14, dt);
-                  const dur = Math.max(0.1, customNpcPreset.duration);
-                  rt.motionElapsed += dt;
-                  const tNorm = logicTarget && rt.logicAnimTimer > 0
-                    ? ((rt.logicAnimDuration - rt.logicAnimTimer) / dur) % 1
-                    : customNpcPreset.loop
-                    ? (rt.motionElapsed / dur) % 1
-                    : Math.min(1, rt.motionElapsed / dur);
-                  applyMotionPresetToHeroRigRuntime(
-                    rt.creatureHeroRig,
-                    customNpcPreset,
-                    tNorm,
-                    rt.motionBlend,
-                    false,
-                    rt.creatureBaseBodyY
+                } else if (rt.creatureHeroRig) {
+                  const cRig = rt.creatureHeroRig;
+                  const phase = gameElapsed + (rt.x + rt.z) * 0.25;
+                  const isBuddyRun = buddyMoving;
+                  const walkStride = isMovingNpc
+                    ? Math.sin(phase * (isBuddyRun ? 10.5 : 7.6)) * (isBuddyRun ? 0.68 : 0.45)
+                    : 0;
+                  const breath = Math.sin(phase * 2.1);
+                  const dC = (cur: number, target: number, lmb = 12) => THREE.MathUtils.damp(cur, target, lmb, dt);
+                  const celebratingNow = npcSlot === 'cheer' || npcSlot === 'celebrate';
+                  const shyNow = npcSlot === 'shy';
+                  const grumpyNow = npcSlot === 'grumpy';
+
+                  cRig.bodyPivot.position.y = dC(
+                    cRig.bodyPivot.position.y,
+                    rt.creatureBaseBodyY + (isMovingNpc ? -Math.abs(walkStride) * 0.03 : 0),
+                    14
                   );
+                  cRig.bodyPivot.rotation.x = dC(cRig.bodyPivot.rotation.x, isMovingNpc ? (isBuddyRun ? 0.1 : 0.05) : 0, 12);
+                  cRig.bodyPivot.rotation.y = dC(cRig.bodyPivot.rotation.y, isMovingNpc ? -walkStride * 0.1 : 0, 12);
+                  cRig.bodyPivot.rotation.z = dC(cRig.bodyPivot.rotation.z, isMovingNpc ? walkStride * 0.05 : 0, 12);
+
+                  if (cRig.spinePivot) {
+                    cRig.spinePivot.rotation.x = dC(
+                      cRig.spinePivot.rotation.x,
+                      isMovingNpc ? (isBuddyRun ? 0.2 : 0.1) : grumpyNow ? 0.16 : shyNow ? 0.14 : breath * 0.04,
+                      12
+                    );
+                    cRig.spinePivot.rotation.y = dC(
+                      cRig.spinePivot.rotation.y,
+                      isMovingNpc ? walkStride * 0.18 : isNpcSpeaking ? Math.sin(phase * 2.6) * 0.1 : 0,
+                      12
+                    );
+                  }
+                  cRig.head.rotation.x = dC(
+                    cRig.head.rotation.x,
+                    celebratingNow
+                      ? -0.22 + Math.sin(phase * 9) * 0.08
+                      : shyNow
+                      ? 0.32
+                      : grumpyNow
+                      ? 0.28
+                      : isMovingNpc
+                      ? -0.1 + Math.abs(Math.cos(phase * (isBuddyRun ? 10.5 : 7.6))) * 0.08
+                      : isNpcSpeaking
+                      ? Math.sin(phase * 5.2) * 0.1
+                      : breath * 0.05,
+                    12
+                  );
+                  cRig.head.rotation.y = dC(
+                    cRig.head.rotation.y,
+                    isMovingNpc
+                      ? -walkStride * 0.22
+                      : shyNow
+                      ? Math.sin(phase * 2.6) * 0.38
+                      : grumpyNow
+                      ? Math.sin(phase * 4.5) * 0.22
+                      : Math.sin(phase * 1.1) * 0.14,
+                    12
+                  );
+
+                  const targetArmLX = celebratingNow
+                    ? -2.35 + Math.sin(phase * 9) * 0.2
+                    : shyNow
+                    ? -0.45
+                    : grumpyNow
+                    ? -0.78
+                    : isMovingNpc
+                    ? -walkStride * 0.72
+                    : isNpcSpeaking
+                    ? -0.38 + Math.sin(phase * 6.5) * 0.28
+                    : breath * 0.05;
+                  const targetArmRX = celebratingNow
+                    ? -2.35 - Math.sin(phase * 9) * 0.2
+                    : shyNow
+                    ? -0.45
+                    : grumpyNow
+                    ? -0.78
+                    : isMovingNpc
+                    ? walkStride * 0.72
+                    : isNpcSpeaking
+                    ? -0.48 - Math.sin(phase * 6.5) * 0.32
+                    : -breath * 0.05;
+
+                  cRig.armL.rotation.x = dC(cRig.armL.rotation.x, targetArmLX, 12);
+                  cRig.armL.rotation.z = dC(cRig.armL.rotation.z, celebratingNow ? 0.38 : grumpyNow ? -0.18 : 0.14, 12);
+                  cRig.armR.rotation.x = dC(cRig.armR.rotation.x, targetArmRX, 12);
+                  cRig.armR.rotation.z = dC(cRig.armR.rotation.z, celebratingNow ? -0.38 : grumpyNow ? 0.18 : -0.14, 12);
+                  if (cRig.forearmL) {
+                    cRig.forearmL.rotation.x = dC(
+                      cRig.forearmL.rotation.x,
+                      grumpyNow ? -1.4 : shyNow ? -1.1 : isMovingNpc ? (isBuddyRun ? -0.75 : -0.36) : -0.22,
+                      12
+                    );
+                  }
+                  if (cRig.forearmR) {
+                    cRig.forearmR.rotation.x = dC(
+                      cRig.forearmR.rotation.x,
+                      grumpyNow ? -1.4 : shyNow ? -1.1 : isMovingNpc ? (isBuddyRun ? -0.75 : -0.36) : -0.22,
+                      12
+                    );
+                  }
+                  cRig.legL.rotation.x = dC(cRig.legL.rotation.x, walkStride, 12);
+                  cRig.legR.rotation.x = dC(cRig.legR.rotation.x, -walkStride, 12);
+
+                  if (customNpcPreset) {
+                    // Overlay custom Buddy Critter motion preset on top of creature rig
+                    const pKey = `${npcSlot}:${customNpcPreset.id}`;
+                    if (rt.motionKey !== pKey) {
+                      rt.motionKey = pKey;
+                      rt.motionElapsed = 0;
+                    }
+                    rt.motionBlend = THREE.MathUtils.damp(rt.motionBlend, 1, 14, dt);
+                    const dur = Math.max(0.1, customNpcPreset.duration);
+                    rt.motionElapsed += dt;
+                    const tNorm = logicTarget && rt.logicAnimTimer > 0
+                      ? ((rt.logicAnimDuration - rt.logicAnimTimer) / dur) % 1
+                      : customNpcPreset.loop
+                      ? (rt.motionElapsed / dur) % 1
+                      : Math.min(1, rt.motionElapsed / dur);
+                    applyMotionPresetToHeroRigRuntime(
+                      cRig,
+                      customNpcPreset,
+                      tNorm,
+                      rt.motionBlend,
+                      false,
+                      rt.creatureBaseBodyY
+                    );
+                  } else {
+                    rt.motionBlend = THREE.MathUtils.damp(rt.motionBlend, 0, 14, dt);
+                    if (rt.motionBlend <= 0.02) rt.motionKey = '';
+                  }
                 } else if (rt.quadrupedRig && customNpcPreset) {
                   const pKey = `${npcSlot}:${customNpcPreset.id}`;
                   if (rt.motionKey !== pKey) {

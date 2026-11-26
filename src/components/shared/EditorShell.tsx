@@ -626,6 +626,7 @@ export const EditorShell: React.FC<{ store: MakerStore }> = ({ store }) => {
           <ObjectMakerModal
             store={store}
             initialAssetId={store.objectMakerTargetAssetId}
+            initialInventoryItemId={store.objectMakerInventoryItemId}
             onClose={() => store.setObjectMakerOpen(false)}
           />
         )}

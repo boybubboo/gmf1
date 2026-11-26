@@ -127,6 +127,8 @@ import type {
   CurveGuideConfig,
   CurveGuidePresetId,
   CustomAssetMeta,
+  InventoryItemCategory,
+  InventoryItemDef,
   MechanismActionMode,
   MechanismAxis,
   MechanismConditionKind,
@@ -135,6 +137,7 @@ import type {
   MechanismTriggerEvent,
   MechanismTriggerRule,
   MotionEasing,
+  ObjectAttachBodyPart,
   ObjectGroupSpec,
   ObjectInteractionAttributeId,
   ObjectInteractionCalibration,
@@ -146,6 +149,11 @@ import type {
   WeatheringPreset,
 } from '../../types/maker';
 import { OBJECT_INTERACTION_ATTRIBUTES } from '../../data/motionLibrary';
+import { getProjectInventoryItems } from '../../data/registries';
+import {
+  OBJECT_BODY_PART_OPTIONS,
+  resolveItemAttachBodyPart,
+} from '../../three/heroEquipmentAttachments';
 import { uid } from '../../utils/terrain';
 import { AssetThumbnail } from '../shared/AssetThumbnail';
 import { EASING_OPTIONS, EasingCurveIcon } from '../shared/MotionEditorPanel';
@@ -154,6 +162,7 @@ import { ObjectInteractionTestModal } from '../shared/ObjectInteractionTestModal
 export interface ObjectMakerModalProps {
   store: MakerStore;
   initialAssetId?: string | null;
+  initialInventoryItemId?: string | null;
   onClose: () => void;
 }
 
@@ -500,6 +509,7 @@ function buildDocFromBuiltinTemplate(template: BuiltinMechanismTemplate | 'saveP
 export const ObjectMakerModal: React.FC<ObjectMakerModalProps> = ({
   store,
   initialAssetId = null,
+  initialInventoryItemId = null,
   onClose,
 }) => {
   // Core studio document state
@@ -508,6 +518,15 @@ export const ObjectMakerModal: React.FC<ObjectMakerModalProps> = ({
   const [assetCategory, setAssetCategory] = useState<AssetCategory>('prop');
   const [doc, setDoc] = useState<ObjectMakerDoc>(() => createStarterObjectDoc());
   const [mechanisms, setMechanisms] = useState<ObjectMechanism[]>([]);
+  const [attachBodyPart, setAttachBodyPart] = useState<ObjectAttachBodyPart | null>(null);
+  const [linkedInventoryItemId, setLinkedInventoryItemId] = useState<string | null>(
+    initialInventoryItemId ?? null
+  );
+  const [includeInInventory, setIncludeInInventory] = useState<boolean>(
+    Boolean(initialInventoryItemId)
+  );
+  const [inventoryCategory, setInventoryCategory] = useState<InventoryItemCategory>('tool');
+  const [geometryDirty, setGeometryDirty] = useState<boolean>(false);
   const [interactionAttributes, setInteractionAttributes] = useState<
     ObjectInteractionAttributeId[]
   >([]);
@@ -630,6 +649,25 @@ export const ObjectMakerModal: React.FC<ObjectMakerModalProps> = ({
       );
       setPlaceOnSave(false);
       setShowLoadMenu(false);
+      const nextAttach =
+        asset.attachBodyPart ?? asset.objectRecipe?.attachBodyPart ?? null;
+      const nextLinkedId =
+        asset.linkedInventoryItemId ?? asset.objectRecipe?.linkedInventoryItemId ?? null;
+      setAttachBodyPart(nextAttach);
+      setLinkedInventoryItemId(nextLinkedId);
+      setIncludeInInventory(Boolean(nextLinkedId));
+      if (nextLinkedId) {
+        const invMatch = getProjectInventoryItems(store.currentProject).find(
+          (i) => i.id === nextLinkedId
+        );
+        if (invMatch) {
+          setInventoryCategory(invMatch.category);
+          if (!nextAttach) {
+            setAttachBodyPart(resolveItemAttachBodyPart(invMatch, store.customAssets));
+          }
+        }
+      }
+      setGeometryDirty(false);
 
       if (asset.objectRecipe && asset.objectRecipe.parts.length > 0) {
         setExternalGlbMode(false);
@@ -661,16 +699,62 @@ export const ObjectMakerModal: React.FC<ObjectMakerModalProps> = ({
         flashToast(`Loaded GLB "${asset.name}" (Rig & Mechanics Editor)`);
       }
     },
-    [flashToast]
+    [flashToast, store.currentProject, store.customAssets]
   );
 
   useEffect(() => {
-    if (!initialAssetId) return;
+    if (!initialAssetId || initialInventoryItemId) return;
     const found = store.customAssets.find((a) => a.id === initialAssetId);
     if (found) {
       void loadExistingCustomAsset(found);
     }
-  }, [initialAssetId]); // intentional mount-sync for initialAssetId
+  }, [initialAssetId, initialInventoryItemId]); // intentional mount-sync for initialAssetId
+
+  useEffect(() => {
+    if (!initialInventoryItemId) return;
+    const invItem = getProjectInventoryItems(store.currentProject).find(
+      (i) => i.id === initialInventoryItemId
+    );
+    if (!invItem) return;
+    const resolvedPart = resolveItemAttachBodyPart(invItem, store.customAssets);
+    setLinkedInventoryItemId(invItem.id);
+    setIncludeInInventory(true);
+    setInventoryCategory(invItem.category);
+    setAttachBodyPart(resolvedPart);
+    setPlaceOnSave(false);
+    setInspectorTab('actions');
+
+    if (invItem.customAssetId) {
+      const linkedAsset = store.customAssets.find((a) => a.id === invItem.customAssetId);
+      if (linkedAsset) {
+        void loadExistingCustomAsset(linkedAsset).then(() => {
+          setLinkedInventoryItemId(invItem.id);
+          setIncludeInInventory(true);
+          setAttachBodyPart(resolvedPart ?? linkedAsset.attachBodyPart ?? null);
+          setInspectorTab('actions');
+        });
+        return;
+      }
+    }
+
+    const starter = createStarterObjectDoc();
+    if (starter.parts[0]) {
+      starter.parts[0].name = invItem.name;
+      starter.parts[0].material = {
+        ...starter.parts[0].material,
+        color: invItem.wearColorHex ?? invItem.colorHex ?? '#7C5CFF',
+      };
+    }
+    setEditingAssetId(null);
+    setExternalGlbMode(false);
+    setObjectName(invItem.name);
+    setAssetCategory('prop');
+    setDoc(starter);
+    setMechanisms([]);
+    setSelectedPartIds(starter.parts[0] ? [starter.parts[0].id] : []);
+    setGeometryDirty(false);
+    flashToast(`Assign body part for "${invItem.name}"`);
+  }, [initialInventoryItemId]);
 
   const pushHistory = useCallback(
     (snapshotDoc: ObjectMakerDoc, snapshotMechs: ObjectMechanism[]) => {
@@ -688,6 +772,7 @@ export const ObjectMakerModal: React.FC<ObjectMakerModalProps> = ({
 
   const commitDoc = useCallback(
     (updater: (prev: ObjectMakerDoc) => ObjectMakerDoc, recordHistory = true) => {
+      setGeometryDirty(true);
       setDoc((prev) => {
         if (recordHistory) {
           setUndoStack((h) => [
@@ -1415,13 +1500,59 @@ export const ObjectMakerModal: React.FC<ObjectMakerModalProps> = ({
     flashToast(`Saved preset "${preset.name}"`);
   };
 
+  const handleApplyBodyPartToLinkedInventory = useCallback(async () => {
+    if (!linkedInventoryItemId) return;
+    const existingInv = getProjectInventoryItems(store.currentProject).find(
+      (i) => i.id === linkedInventoryItemId
+    );
+    if (!existingInv) return;
+
+    store.updateInventoryItem({
+      ...existingInv,
+      attachBodyPart: attachBodyPart ?? undefined,
+    });
+    if (editingAssetId) {
+      const existingAsset = store.customAssets.find((a) => a.id === editingAssetId);
+      if (existingAsset) {
+        await store.updateCustomAssetMeta({
+          ...existingAsset,
+          attachBodyPart: attachBodyPart ?? undefined,
+          linkedInventoryItemId,
+        });
+      }
+    }
+    flashToast(
+      attachBodyPart
+        ? `Assigned "${existingInv.name}" to ${
+            OBJECT_BODY_PART_OPTIONS.find((o) => o.id === attachBodyPart)?.short ?? attachBodyPart
+          }`
+        : `Cleared body part for "${existingInv.name}"`
+    );
+  }, [linkedInventoryItemId, attachBodyPart, editingAssetId, store, flashToast]);
+
   // Save built GLB + recipe + mechanisms + vertex paint into Asset Vault & optional world placement
   const handleSaveAsset = async (opts?: { asCopy?: boolean; placeNow?: boolean }): Promise<string | null> => {
     const cleanName = objectName.trim() || 'Custom Object';
     setSaving(true);
     try {
-      let meta: CustomAssetMeta;
+      let meta: CustomAssetMeta | null = null;
       const strokesToSave = paintStrokes.length > 0 ? paintStrokes : undefined;
+
+      // Fast-path when opened solely to assign a body part to an existing procedural inventory item without sculpting a new 3D mesh
+      if (
+        linkedInventoryItemId &&
+        !editingAssetId &&
+        !externalGlbMode &&
+        !geometryDirty &&
+        paintStrokes.length === 0 &&
+        mechanisms.length === 0 &&
+        !opts?.placeNow &&
+        !opts?.asCopy
+      ) {
+        await handleApplyBodyPartToLinkedInventory();
+        return null;
+      }
+
       if (externalGlbMode && editingAssetId) {
         const existing = store.customAssets.find((a) => a.id === editingAssetId);
         if (!existing) throw new Error('Existing asset not found');
@@ -1442,6 +1573,8 @@ export const ObjectMakerModal: React.FC<ObjectMakerModalProps> = ({
               ? interactionCalibrations
               : undefined,
           vertexPaintStrokes: strokesToSave,
+          attachBodyPart: attachBodyPart ?? undefined,
+          linkedInventoryItemId: linkedInventoryItemId ?? undefined,
           thumbnailDataUrl: nextThumb ?? existing.thumbnailDataUrl,
         };
         await store.updateCustomAssetMeta(meta);
@@ -1461,6 +1594,8 @@ export const ObjectMakerModal: React.FC<ObjectMakerModalProps> = ({
         const shiftedStrokes = paintStrokes.length > 0 ? shiftVertexPaintStrokes(paintStrokes, shift) : [];
         const docWithPaint: ObjectMakerDoc = {
           ...groundedDoc,
+          attachBodyPart: attachBodyPart ?? undefined,
+          linkedInventoryItemId: linkedInventoryItemId ?? undefined,
           interactionAttributes:
             interactionAttributes.length > 0 ? interactionAttributes : undefined,
           interactionCalibrations:
@@ -1483,15 +1618,73 @@ export const ObjectMakerModal: React.FC<ObjectMakerModalProps> = ({
           objectRecipe: docWithPaint,
           vertexPaintStrokes: shiftedStrokes.length > 0 ? shiftedStrokes : undefined,
           keepMetricScale: true,
+          attachBodyPart,
+          linkedInventoryItemId,
         });
         setDoc(docWithPaint);
         setMechanisms(shiftedMechs);
         setPaintStrokes(shiftedStrokes);
         setEditingAssetId(meta.id);
+        setGeometryDirty(false);
         flashToast(targetId ? `Saved "${meta.name}"` : `Added "${meta.name}" to Assets`);
       }
 
-      if (opts?.placeNow) {
+      if (meta && !opts?.asCopy && (includeInInventory || linkedInventoryItemId)) {
+        const existingInv = linkedInventoryItemId
+          ? getProjectInventoryItems(store.currentProject).find(
+              (i) => i.id === linkedInventoryItemId
+            )
+          : undefined;
+        if (existingInv) {
+          store.updateInventoryItem({
+            ...existingInv,
+            attachBodyPart: attachBodyPart ?? undefined,
+            ...((geometryDirty || externalGlbMode || Boolean(existingInv.customAssetId))
+              ? { customAssetId: meta.id }
+              : {}),
+          });
+        } else if (includeInInventory) {
+          const newItemId = `custom_item_${meta.id}`;
+          const newItem: InventoryItemDef = {
+            id: newItemId,
+            name: cleanName,
+            category: inventoryCategory,
+            icon:
+              inventoryCategory === 'weapon'
+                ? 'sword'
+                : inventoryCategory === 'wearable'
+                ? 'shield'
+                : 'sparkles',
+            meshKind:
+              inventoryCategory === 'weapon'
+                ? 'sword'
+                : inventoryCategory === 'wearable'
+                ? 'shield'
+                : 'gem',
+            colorHex: doc.parts[0]?.material.color || '#7C5CFF',
+            description: 'Custom object created in Object Editor.',
+            customAssetId: meta.id,
+            attachBodyPart: attachBodyPart ?? undefined,
+            ...(attachBodyPart === 'rightHand'
+              ? { toolKind: 'sword' as const }
+              : attachBodyPart === 'leftHand'
+              ? { wearSlot: 'offhand' as const }
+              : attachBodyPart === 'head'
+              ? { wearSlot: 'head' as const }
+              : attachBodyPart === 'back' || attachBodyPart === 'chest'
+              ? { wearSlot: 'body' as const }
+              : attachBodyPart === 'neck'
+              ? { wearSlot: 'accessory' as const }
+              : {}),
+          };
+          store.addInventoryItem(newItem);
+          setLinkedInventoryItemId(newItemId);
+          await store.updateCustomAssetMeta({ ...meta, linkedInventoryItemId: newItemId });
+          flashToast(`Saved "${cleanName}" to Inventory`);
+        }
+      }
+
+      if (meta && opts?.placeNow) {
         const kind =
           assetCategory === 'character'
             ? 'npc'
@@ -1513,25 +1706,25 @@ export const ObjectMakerModal: React.FC<ObjectMakerModalProps> = ({
             `attach features to ${meta.name}`,
             (ent) => ({
               ...ent,
-              ...(meta.mechanisms?.length
-                ? { mechanisms: JSON.parse(JSON.stringify(meta.mechanisms)) }
+              ...(meta!.mechanisms?.length
+                ? { mechanisms: JSON.parse(JSON.stringify(meta!.mechanisms)) }
                 : {}),
-              ...(meta.interactionAttributes?.length
-                ? { interactionAttributes: [...meta.interactionAttributes] }
+              ...(meta!.interactionAttributes?.length
+                ? { interactionAttributes: [...meta!.interactionAttributes] }
                 : {}),
-              ...(meta.interactionCalibrations
+              ...(meta!.interactionCalibrations
                 ? {
                     interactionCalibrations: JSON.parse(
-                      JSON.stringify(meta.interactionCalibrations)
+                      JSON.stringify(meta!.interactionCalibrations)
                     ) as Partial<
                       Record<ObjectInteractionAttributeId, ObjectInteractionCalibration>
                     >,
                   }
                 : {}),
-              ...(meta.vertexPaintStrokes?.length
+              ...(meta!.vertexPaintStrokes?.length
                 ? {
                     vertexPaintStrokes: JSON.parse(
-                      JSON.stringify(meta.vertexPaintStrokes)
+                      JSON.stringify(meta!.vertexPaintStrokes)
                     ) as VertexPaintStroke[],
                   }
                 : {}),
@@ -1541,7 +1734,7 @@ export const ObjectMakerModal: React.FC<ObjectMakerModalProps> = ({
         }
         flashToast(`Saved & placed "${meta.name}" in level`);
       }
-      return meta.id;
+      return meta?.id ?? null;
     } catch (err) {
       flashToast(err instanceof Error ? err.message : 'Save failed');
       return null;
@@ -4832,9 +5025,87 @@ export const ObjectMakerModal: React.FC<ObjectMakerModalProps> = ({
                 </div>
               )}
 
-              {/* TAB 5: CHARACTER INTERACTION ATTRIBUTES & CALIBRATION */}
+              {/* TAB 5: CHARACTER INTERACTION ATTRIBUTES, BODY PART ATTACHMENT & CALIBRATION */}
               {inspectorTab === 'actions' && (
                 <div className="space-y-3">
+                  {/* Character Body Part Attachment & Inventory Link */}
+                  <div className="rounded-xl bg-[#7C5CFF]/10 border border-[#7C5CFF]/30 p-3 space-y-2.5">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-xs font-extrabold text-[#6A48F5] dark:text-[#C4B5FD]">
+                        Attach to Character Body Part
+                      </span>
+                      {attachBodyPart && (
+                        <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-[#20B46A]/20 text-[#059669] dark:text-[#34D399]">
+                          {OBJECT_BODY_PART_OPTIONS.find((o) => o.id === attachBodyPart)?.short ??
+                            attachBodyPart}
+                        </span>
+                      )}
+                    </div>
+                    <p className="text-[11px] text-slate-600 dark:text-[#949BB0] leading-snug">
+                      Pick which hand, limb, or appendage holds or wears this object when loaded in Motion Studio.
+                    </p>
+                    <select
+                      value={attachBodyPart ?? ''}
+                      onChange={(e) =>
+                        setAttachBodyPart(
+                          e.target.value ? (e.target.value as ObjectAttachBodyPart) : null
+                        )
+                      }
+                      aria-label="Character body part attachment"
+                      className="w-full px-2.5 py-1.5 rounded-lg bg-white dark:bg-[#12151E] border border-slate-200/80 dark:border-white/[0.1] text-xs font-bold"
+                    >
+                      <option value="">Unassigned (Choose Body Part)</option>
+                      {OBJECT_BODY_PART_OPTIONS.map((opt) => (
+                        <option key={opt.id} value={opt.id}>
+                          {opt.label}
+                        </option>
+                      ))}
+                    </select>
+
+                    <div className="flex items-center justify-between gap-2 pt-0.5">
+                      <label className="inline-flex items-center gap-1.5 text-[11px] font-bold cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={includeInInventory || Boolean(linkedInventoryItemId)}
+                          disabled={Boolean(linkedInventoryItemId)}
+                          onChange={(e) => setIncludeInInventory(e.target.checked)}
+                          className="accent-[#7C5CFF]"
+                        />
+                        <span>Include in Game Inventory</span>
+                      </label>
+
+                      {(includeInInventory || Boolean(linkedInventoryItemId)) &&
+                        !linkedInventoryItemId && (
+                          <select
+                            value={inventoryCategory}
+                            onChange={(e) =>
+                              setInventoryCategory(e.target.value as InventoryItemCategory)
+                            }
+                            aria-label="Inventory category"
+                            className="px-2 py-1 rounded-lg bg-white dark:bg-[#12151E] border border-slate-200/80 dark:border-white/[0.1] text-[11px] font-bold"
+                          >
+                            <option value="weapon">Weapon</option>
+                            <option value="tool">Tool</option>
+                            <option value="wearable">Wearable</option>
+                            <option value="consumable">Food / Potion</option>
+                            <option value="resource">Resource</option>
+                            <option value="material">Relic / Material</option>
+                          </select>
+                        )}
+                    </div>
+
+                    {linkedInventoryItemId && (
+                      <button
+                        type="button"
+                        onClick={() => void handleApplyBodyPartToLinkedInventory()}
+                        className="w-full py-1.5 px-3 rounded-lg bg-[#20B46A] hover:bg-[#1A9E5C] text-white text-[11px] font-extrabold inline-flex items-center justify-center gap-1.5 shadow-sm transition-colors"
+                      >
+                        <Check size={12} />
+                        <span>Apply Body Part to Inventory Item</span>
+                      </button>
+                    )}
+                  </div>
+
                   <div className="rounded-xl bg-[#10B981]/10 border border-[#10B981]/25 p-3 space-y-2">
                     <div className="text-xs font-extrabold text-emerald-700 dark:text-emerald-300">
                       Object Interaction Attributes

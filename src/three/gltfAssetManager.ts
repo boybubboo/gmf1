@@ -14,6 +14,7 @@ import type {
   ObjectInteractionCalibration,
   ObjectMakerDoc,
   ObjectMechanism,
+  ObjectAttachBodyPart,
   StylizedCanopyConfig,
   VertexPaintStroke,
   VisualStyleId,
@@ -548,6 +549,8 @@ export async function registerGeneratedGlbAsset(opts: {
   vertexPaintStrokes?: VertexPaintStroke[];
   thumbnailOverride?: string;
   keepMetricScale?: boolean;
+  attachBodyPart?: ObjectAttachBodyPart | null;
+  linkedInventoryItemId?: string | null;
 }): Promise<{ meta: CustomAssetMeta; buffer: ArrayBuffer }> {
   const gltf = await loader.parseAsync(opts.buffer, '');
   const cached = prepareGLTFScene(gltf, opts.category);
@@ -607,6 +610,14 @@ export async function registerGeneratedGlbAsset(opts: {
     treeRecipe: opts.treeRecipe,
     buildingBlock: opts.buildingBlock,
     vertexPaintStrokes: strokes,
+    attachBodyPart:
+      opts.attachBodyPart !== undefined
+        ? opts.attachBodyPart ?? undefined
+        : opts.existingMeta?.attachBodyPart,
+    linkedInventoryItemId:
+      opts.linkedInventoryItemId !== undefined
+        ? opts.linkedInventoryItemId ?? undefined
+        : opts.existingMeta?.linkedInventoryItemId,
     favorite: opts.existingMeta?.favorite,
     groundOffset: Number(cached.baseGroundOffset.toFixed(3)),
     defaultScale: opts.keepMetricScale

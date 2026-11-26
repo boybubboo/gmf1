@@ -959,27 +959,73 @@ function buildQuadrupedPresetKeyframes(
     }
 
     case 'celebrate':
-    case 'cheer':
-    case 'grumpy':
+    case 'cheer': {
+      const i0: Record<string, BonePoseAngles> = {
+        MonsterBodyPivot: [6, 0, 2],
+        Wing_L_Inner: [0, 0, -10],
+        Wing_R_Inner: [0, 0, 10],
+        MonsterTail_0: [10, 14, 0],
+      };
+      setHeads(i0, { neckP: 6, neckY: 12, headY: 10, headR: 8, jaw: 12 }, true);
+      const i1: Record<string, BonePoseAngles> = {
+        MonsterBodyPivot: [-10, 0, -2],
+        Wing_L_Inner: [0, 0, -34],
+        Wing_R_Inner: [0, 0, 34],
+        MonsterTail_0: [16, -14, 0],
+      };
+      setHeads(i1, { neckP: -14, neckY: -12, headY: -10, headR: -8, jaw: 22 }, true);
+      return {
+        duration: 1.05,
+        loop: true,
+        keyframes: [mkQ(0, i0, 0), mkQ(0.45, i1, 0.14, 'easeOut'), mkQ(1.0, i0, 0)],
+      };
+    }
+
+    case 'grumpy': {
+      const g0: Record<string, BonePoseAngles> = {
+        MonsterBodyPivot: [6, -6, 3],
+        Wing_L_Inner: [0, 0, -16],
+        Wing_R_Inner: [0, 0, 16],
+        MonsterTail_0: [16, 16, 0],
+      };
+      setHeads(g0, { neckP: 14, neckY: -16, headY: -12, headR: 12, jaw: 16 });
+      const g1: Record<string, BonePoseAngles> = {
+        MonsterBodyPivot: [8, 6, -3],
+        Leg_0_L_Hip: [-24, 0, 0],
+        Wing_L_Inner: [0, 0, -20],
+        Wing_R_Inner: [0, 0, 20],
+        MonsterTail_0: [18, -16, 0],
+      };
+      setHeads(g1, { neckP: 16, neckY: 16, headY: 12, headR: -12, jaw: 20 });
+      return {
+        duration: 1.0,
+        loop: true,
+        keyframes: [mkQ(0, g0, 0), mkQ(0.5, g1, 0), mkQ(1.0, g0, 0)],
+      };
+    }
+
+    case 'idle':
     default: {
       const i0: Record<string, BonePoseAngles> = {
-        MonsterBodyPivot: [2, 0, 2],
+        MonsterChest: [2, 0, 1],
+        MonsterTorso: [2, 0, 0],
         Wing_L_Inner: [0, 0, -6],
         Wing_R_Inner: [0, 0, 6],
         MonsterTail_0: [0, 10, 0],
       };
-      setHeads(i0, { neckP: 4, neckY: 10, headY: 8, headR: 6, jaw: 6 }, true);
+      setHeads(i0, { neckP: 4, neckY: 8, headY: 6, headR: 5, jaw: 4 }, true);
       const i1: Record<string, BonePoseAngles> = {
-        MonsterBodyPivot: [-2, 0, -2],
+        MonsterChest: [-2, 0, -1],
+        MonsterTorso: [-2, 0, 0],
         Wing_L_Inner: [0, 0, -12],
         Wing_R_Inner: [0, 0, 12],
         MonsterTail_0: [0, -10, 0],
       };
-      setHeads(i1, { neckP: -4, neckY: -10, headY: -8, headR: -6, jaw: 10 }, true);
+      setHeads(i1, { neckP: -4, neckY: -8, headY: -6, headR: -5, jaw: 8 }, true);
       return {
         duration: 2.0,
         loop: true,
-        keyframes: [mkQ(0, i0, 0), mkQ(0.5, i1, 0.04)],
+        keyframes: [mkQ(0, i0, 0), mkQ(0.5, i1, 0)],
       };
     }
   }
@@ -988,7 +1034,7 @@ function buildQuadrupedPresetKeyframes(
 function buildCritterPresetKeyframes(
   slot: CustomClipSlot,
   availableSet: Set<string> | null
-): { duration: number; loop: boolean; keyframes: CustomPoseKeyframe[]; events?: MotionEventMarker[] } {
+): { duration: number; loop: boolean; keyframes: CustomPoseKeyframe[]; events?: MotionEventMarker[] } | null {
   const mkC = (
     time: number,
     rawBones: Record<string, BonePoseAngles>,
@@ -1003,78 +1049,573 @@ function buildCritterPresetKeyframes(
   });
 
   switch (slot) {
+    case 'idle':
+      return {
+        duration: 2.0,
+        loop: true,
+        keyframes: [
+          mkC(
+            0,
+            {
+              Spine: [2, 2, 0],
+              Head: [4, 12, 6],
+              LeftUpperArm: [4, 0, 8],
+              RightUpperArm: [-4, 0, -8],
+              LeftLowerArm: [-12, 0, 0],
+              RightLowerArm: [-12, 0, 0],
+              Tail: [4, 14, 0],
+              LeftWing: [0, 0, -6],
+              RightWing: [0, 0, 6],
+            },
+            0
+          ),
+          mkC(
+            0.5,
+            {
+              Spine: [5, -2, 0],
+              Head: [-4, -12, -6],
+              LeftUpperArm: [-4, 0, 10],
+              RightUpperArm: [4, 0, -10],
+              LeftLowerArm: [-16, 0, 0],
+              RightLowerArm: [-16, 0, 0],
+              Tail: [8, -14, 0],
+              LeftWing: [0, 0, -12],
+              RightWing: [0, 0, 12],
+            },
+            0
+          ),
+        ],
+      };
+
     case 'walk':
     case 'run': {
       const isRun = slot === 'run';
-      const stride = isRun ? 38 : 24;
+      const legStride = isRun ? 42 : 26;
+      const armSwing = isRun ? 46 : 28;
+      const elbowBend = isRun ? -52 : -22;
+      const elbowBack = isRun ? -28 : -12;
+      const spineLean = isRun ? 14 : 6;
+      const spineTwist = isRun ? 10 : 6;
+      const headPitch = isRun ? -10 : -4;
+      const headYaw = isRun ? 10 : 8;
+      const headRoll = isRun ? 7 : 5;
+      const dropY = isRun ? -0.04 : -0.02;
       return {
-        duration: isRun ? 0.54 : 0.78,
+        duration: isRun ? 0.56 : 0.82,
         loop: true,
         keyframes: [
-          mkC(0, { Hips: [4, 0, 5], Head: [-4, 4, -4], LeftUpperLeg: [-stride, 0, 0], RightUpperLeg: [stride, 0, 0], Tail: [8, 14, 0], LeftWing: [0, 0, -16], RightWing: [0, 0, 16] }, isRun ? 0.06 : 0.03),
-          mkC(0.5, { Hips: [4, 0, -5], Head: [-4, -4, 4], LeftUpperLeg: [stride, 0, 0], RightUpperLeg: [-stride, 0, 0], Tail: [8, -14, 0], LeftWing: [0, 0, -28], RightWing: [0, 0, 28] }, isRun ? 0.06 : 0.03),
+          mkC(
+            0,
+            {
+              Hips: [isRun ? 6 : 3, -5, 3],
+              Spine: [spineLean, spineTwist, -2],
+              Head: [headPitch, -headYaw, -headRoll],
+              LeftUpperLeg: [-legStride, 0, 0],
+              RightUpperLeg: [legStride, 0, 0],
+              LeftUpperArm: [armSwing, 0, 8],
+              LeftLowerArm: [elbowBack, 0, 0],
+              RightUpperArm: [-armSwing, 0, -8],
+              RightLowerArm: [elbowBend, 0, 0],
+              Tail: [8, 16, 0],
+              LeftWing: [0, 0, -16],
+              RightWing: [0, 0, 16],
+            },
+            0
+          ),
+          mkC(
+            0.25,
+            {
+              Hips: [isRun ? 8 : 4, 0, 4],
+              Spine: [spineLean + 3, 0, -3],
+              Head: [headPitch + 5, 0, 0],
+              LeftUpperLeg: [-8, 0, 0],
+              RightUpperLeg: [8, 0, 0],
+              LeftUpperArm: [12, 0, 10],
+              LeftLowerArm: [elbowBend * 0.7, 0, 0],
+              RightUpperArm: [-12, 0, -10],
+              RightLowerArm: [elbowBend * 0.7, 0, 0],
+              Tail: [12, 0, 0],
+              LeftWing: [0, 0, -28],
+              RightWing: [0, 0, 28],
+            },
+            dropY
+          ),
+          mkC(
+            0.5,
+            {
+              Hips: [isRun ? 6 : 3, 5, -3],
+              Spine: [spineLean, -spineTwist, 2],
+              Head: [headPitch, headYaw, headRoll],
+              LeftUpperLeg: [legStride, 0, 0],
+              RightUpperLeg: [-legStride, 0, 0],
+              LeftUpperArm: [-armSwing, 0, 8],
+              LeftLowerArm: [elbowBend, 0, 0],
+              RightUpperArm: [armSwing, 0, -8],
+              RightLowerArm: [elbowBack, 0, 0],
+              Tail: [8, -16, 0],
+              LeftWing: [0, 0, -16],
+              RightWing: [0, 0, 16],
+            },
+            0
+          ),
+          mkC(
+            0.75,
+            {
+              Hips: [isRun ? 8 : 4, 0, -4],
+              Spine: [spineLean + 3, 0, 3],
+              Head: [headPitch + 5, 0, 0],
+              LeftUpperLeg: [8, 0, 0],
+              RightUpperLeg: [-8, 0, 0],
+              LeftUpperArm: [-12, 0, 10],
+              LeftLowerArm: [elbowBend * 0.7, 0, 0],
+              RightUpperArm: [12, 0, -10],
+              RightLowerArm: [elbowBend * 0.7, 0, 0],
+              Tail: [12, 0, 0],
+              LeftWing: [0, 0, -28],
+              RightWing: [0, 0, 28],
+            },
+            dropY
+          ),
         ],
       };
     }
+
     case 'fly':
       return {
         duration: 0.65,
         loop: true,
         keyframes: [
-          mkC(0, { Hips: [-8, 0, 0], Head: [6, 0, 0], LeftWing: [0, 0, -45], RightWing: [0, 0, 45], LeftUpperLeg: [24, 0, 0], RightUpperLeg: [24, 0, 0] }, 0.24),
-          mkC(0.5, { Hips: [4, 0, 0], Head: [-4, 0, 0], LeftWing: [0, 0, 38], RightWing: [0, 0, -38], LeftUpperLeg: [20, 0, 0], RightUpperLeg: [20, 0, 0] }, 0.14),
+          mkC(
+            0,
+            {
+              Hips: [-8, 0, 0],
+              Spine: [10, 0, 0],
+              Head: [-12, 0, 0],
+              LeftUpperArm: [-28, 0, 52],
+              RightUpperArm: [-28, 0, -52],
+              LeftLowerArm: [-18, 0, 0],
+              RightLowerArm: [-18, 0, 0],
+              LeftWing: [0, 0, -45],
+              RightWing: [0, 0, 45],
+              LeftUpperLeg: [24, 0, 0],
+              RightUpperLeg: [24, 0, 0],
+              Tail: [12, 0, 0],
+            },
+            0.22
+          ),
+          mkC(
+            0.5,
+            {
+              Hips: [4, 0, 0],
+              Spine: [4, 0, 0],
+              Head: [-4, 0, 0],
+              LeftUpperArm: [12, 0, 18],
+              RightUpperArm: [12, 0, -18],
+              LeftLowerArm: [-28, 0, 0],
+              RightLowerArm: [-28, 0, 0],
+              LeftWing: [0, 0, 38],
+              RightWing: [0, 0, -38],
+              LeftUpperLeg: [18, 0, 0],
+              RightUpperLeg: [18, 0, 0],
+              Tail: [-8, 0, 0],
+            },
+            0.12
+          ),
         ],
       };
+
     case 'cheer':
     case 'celebrate':
       return {
-        duration: 0.9,
+        duration: 0.95,
         loop: true,
         keyframes: [
-          mkC(0, { Hips: [8, 0, 0], Head: [6, 0, 0], LeftWing: [0, 0, 10], RightWing: [0, 0, -10] }, 0),
-          mkC(0.45, { Hips: [-12, 0, 0], Head: [-14, 12, 10], LeftWing: [0, 0, -48], RightWing: [0, 0, 48], Tail: [18, 0, 0] }, 0.22, 'easeOut'),
-          mkC(0.9, { Hips: [6, 0, 0], Head: [4, -10, -8], LeftWing: [0, 0, 8], RightWing: [0, 0, -8] }, 0),
+          mkC(
+            0,
+            {
+              Spine: [8, 0, 0],
+              Head: [6, 0, 0],
+              LeftUpperArm: [-38, 0, 20],
+              RightUpperArm: [-38, 0, -20],
+              LeftLowerArm: [-28, 0, 0],
+              RightLowerArm: [-28, 0, 0],
+              LeftUpperLeg: [-18, 0, 0],
+              RightUpperLeg: [-18, 0, 0],
+              LeftWing: [0, 0, 10],
+              RightWing: [0, 0, -10],
+            },
+            -0.04
+          ),
+          mkC(
+            0.45,
+            {
+              Hips: [-10, 0, 0],
+              Spine: [-8, 0, 0],
+              Head: [-16, 12, 10],
+              LeftUpperArm: [-142, 0, 24],
+              RightUpperArm: [-142, 0, -24],
+              LeftLowerArm: [-18, 0, 0],
+              RightLowerArm: [-18, 0, 0],
+              LeftUpperLeg: [-28, 0, 0],
+              RightUpperLeg: [-28, 0, 0],
+              LeftWing: [0, 0, -48],
+              RightWing: [0, 0, 48],
+              Tail: [18, 12, 0],
+            },
+            0.22,
+            'easeOut'
+          ),
+          mkC(
+            0.9,
+            {
+              Spine: [6, 0, 0],
+              Head: [4, -10, -8],
+              LeftUpperArm: [-110, 0, 30],
+              RightUpperArm: [-110, 0, -30],
+              LeftLowerArm: [-24, 0, 0],
+              RightLowerArm: [-24, 0, 0],
+              LeftWing: [0, 0, 8],
+              RightWing: [0, 0, -8],
+            },
+            -0.02
+          ),
         ],
       };
+
     case 'shy':
       return {
         duration: 1.3,
         loop: true,
         keyframes: [
-          mkC(0, { Hips: [6, 14, 0], Head: [20, -24, 14], LeftWing: [0, 0, 14], RightWing: [0, 0, -14], Tail: [-14, 0, 0] }, -0.04),
-          mkC(0.5, { Hips: [8, -14, 0], Head: [22, 26, -14], LeftWing: [0, 0, 16], RightWing: [0, 0, -16], Tail: [-18, 8, 0] }, -0.05),
+          mkC(
+            0,
+            {
+              Hips: [4, 12, 0],
+              Spine: [8, 10, 0],
+              Head: [18, -24, 14],
+              LeftUpperArm: [-26, 22, -6],
+              RightUpperArm: [-26, -22, 6],
+              LeftLowerArm: [-68, 0, 0],
+              RightLowerArm: [-68, 0, 0],
+              LeftWing: [0, 0, 14],
+              RightWing: [0, 0, -14],
+              Tail: [-14, 0, 0],
+            },
+            -0.02
+          ),
+          mkC(
+            0.5,
+            {
+              Hips: [6, -12, 0],
+              Spine: [10, -10, 0],
+              Head: [20, 24, -14],
+              LeftUpperArm: [-30, 24, -6],
+              RightUpperArm: [-30, -24, 6],
+              LeftLowerArm: [-72, 0, 0],
+              RightLowerArm: [-72, 0, 0],
+              LeftWing: [0, 0, 16],
+              RightWing: [0, 0, -16],
+              Tail: [-18, 8, 0],
+            },
+            -0.03
+          ),
         ],
       };
+
     case 'grumpy':
       return {
         duration: 1.0,
         loop: true,
         keyframes: [
-          mkC(0, { Hips: [10, -10, 4], Head: [18, 12, -12], LeftWing: [0, 0, -18], RightWing: [0, 0, 18], Tail: [22, 0, 0] }, 0),
-          mkC(0.35, { Hips: [14, 10, -6], Head: [20, -14, 12], LeftUpperLeg: [-24, 0, 0], Tail: [26, 16, 0] }, 0.06),
-          mkC(0.7, { Hips: [10, -8, 4], Head: [18, 10, -10], RightUpperLeg: [-24, 0, 0], Tail: [22, -16, 0] }, 0),
+          mkC(
+            0,
+            {
+              Hips: [6, -8, 4],
+              Spine: [10, -10, 0],
+              Head: [16, 12, -12],
+              LeftUpperArm: [-46, 38, -10],
+              RightUpperArm: [-46, -38, 10],
+              LeftLowerArm: [-84, 0, 0],
+              RightLowerArm: [-84, 0, 0],
+              LeftWing: [0, 0, -18],
+              RightWing: [0, 0, 18],
+              Tail: [22, 0, 0],
+            },
+            0
+          ),
+          mkC(
+            0.35,
+            {
+              Hips: [10, 8, -4],
+              Spine: [12, 10, 0],
+              Head: [18, -14, 12],
+              LeftUpperArm: [-48, 38, -12],
+              RightUpperArm: [-48, -38, 12],
+              LeftLowerArm: [-86, 0, 0],
+              RightLowerArm: [-86, 0, 0],
+              LeftUpperLeg: [-28, 0, 0],
+              Tail: [26, 16, 0],
+            },
+            0.04
+          ),
+          mkC(
+            0.7,
+            {
+              Hips: [6, -6, 4],
+              Spine: [10, -8, 0],
+              Head: [16, 10, -10],
+              LeftUpperArm: [-46, 38, -10],
+              RightUpperArm: [-46, -38, 10],
+              LeftLowerArm: [-84, 0, 0],
+              RightLowerArm: [-84, 0, 0],
+              RightUpperLeg: [-28, 0, 0],
+              Tail: [22, -16, 0],
+            },
+            0
+          ),
         ],
       };
+
     case 'misfitPower':
       return {
         duration: 0.95,
         loop: false,
         keyframes: [
-          mkC(0, { Hips: [14, 0, 0], Head: [12, 0, 0] }, -0.06),
-          mkC(0.42, { Hips: [-16, 180, 0], Head: [-20, 0, 0], LeftWing: [0, 0, -52], RightWing: [0, 0, 52], Tail: [24, 0, 0] }, 0.28, 'easeOut'),
-          mkC(1.0, { Hips: [0, 360, 0], Head: [0, 0, 0] }, 0),
+          mkC(
+            0,
+            {
+              Hips: [14, 0, 0],
+              Spine: [14, 0, 0],
+              Head: [12, 0, 0],
+              LeftUpperArm: [24, 0, 12],
+              RightUpperArm: [24, 0, -12],
+              LeftLowerArm: [-44, 0, 0],
+              RightLowerArm: [-44, 0, 0],
+              LeftUpperLeg: [-24, 0, 0],
+              RightUpperLeg: [-24, 0, 0],
+            },
+            -0.06
+          ),
+          mkC(
+            0.42,
+            {
+              Hips: [-14, 180, 0],
+              Spine: [-10, 0, 0],
+              Head: [-18, 0, 0],
+              LeftUpperArm: [-128, 0, 44],
+              RightUpperArm: [-128, 0, -44],
+              LeftLowerArm: [-16, 0, 0],
+              RightLowerArm: [-16, 0, 0],
+              LeftUpperLeg: [-36, 0, 0],
+              RightUpperLeg: [-20, 0, 0],
+              LeftWing: [0, 0, -52],
+              RightWing: [0, 0, 52],
+              Tail: [24, 0, 0],
+            },
+            0.28,
+            'easeOut'
+          ),
+          mkC(
+            1.0,
+            {
+              Hips: [0, 360, 0],
+              Spine: [0, 0, 0],
+              Head: [0, 0, 0],
+              LeftUpperArm: [0, 0, 0],
+              RightUpperArm: [0, 0, 0],
+            },
+            0
+          ),
         ],
         events: [{ id: uid(), time: 0.42, kind: 'impact', label: 'Misfit Trigger' }],
       };
-    default:
+
+    case 'wave':
       return {
-        duration: 1.8,
+        duration: 1.15,
         loop: true,
         keyframes: [
-          mkC(0, { Hips: [2, 0, 2], Head: [4, 12, 6], Tail: [4, 12, 0], LeftWing: [0, 0, -6], RightWing: [0, 0, 6] }, 0),
-          mkC(0.5, { Hips: [-2, 0, -2], Head: [-4, -12, -6], Tail: [-4, -12, 0], LeftWing: [0, 0, -12], RightWing: [0, 0, 12] }, 0.03),
+          mkC(
+            0,
+            {
+              Spine: [-4, -6, 4],
+              Head: [-6, 10, 8],
+              RightUpperArm: [-124, 0, -30],
+              RightLowerArm: [-32, 0, -24],
+              LeftUpperArm: [6, 0, 10],
+              LeftLowerArm: [-18, 0, 0],
+              Tail: [8, 16, 0],
+              LeftWing: [0, 0, -10],
+              RightWing: [0, 0, 26],
+            },
+            0
+          ),
+          mkC(
+            0.5,
+            {
+              Spine: [-4, 6, -4],
+              Head: [-6, -10, -8],
+              RightUpperArm: [-128, 0, -18],
+              RightLowerArm: [-36, 0, 24],
+              LeftUpperArm: [6, 0, 10],
+              LeftLowerArm: [-18, 0, 0],
+              Tail: [8, -16, 0],
+              LeftWing: [0, 0, -10],
+              RightWing: [0, 0, 12],
+            },
+            0
+          ),
         ],
       };
+
+    case 'laugh':
+      return {
+        duration: 1.15,
+        loop: true,
+        keyframes: [
+          mkC(
+            0,
+            {
+              Spine: [-10, 0, 0],
+              Head: [-16, 0, 8],
+              LeftUpperArm: [-38, 22, 10],
+              RightUpperArm: [-38, -22, -10],
+              LeftLowerArm: [-82, 0, 0],
+              RightLowerArm: [-82, 0, 0],
+              Tail: [16, 18, 0],
+            },
+            0
+          ),
+          mkC(
+            0.25,
+            {
+              Spine: [-18, 8, 0],
+              Head: [-24, 8, -8],
+              LeftUpperArm: [-46, 26, 16],
+              RightUpperArm: [-46, -26, -16],
+              LeftLowerArm: [-92, 0, 0],
+              RightLowerArm: [-92, 0, 0],
+              Tail: [20, -18, 0],
+              LeftWing: [0, 0, -26],
+              RightWing: [0, 0, 26],
+            },
+            0.05
+          ),
+          mkC(0.5, { Spine: [-8, 0, 0], Head: [-12, 0, 8], Tail: [12, 14, 0] }, 0),
+          mkC(
+            0.75,
+            {
+              Spine: [-18, -8, 0],
+              Head: [-24, -8, 8],
+              LeftUpperArm: [-46, 26, 16],
+              RightUpperArm: [-46, -26, -16],
+              LeftLowerArm: [-92, 0, 0],
+              RightLowerArm: [-92, 0, 0],
+              Tail: [20, -18, 0],
+              LeftWing: [0, 0, -26],
+              RightWing: [0, 0, 26],
+            },
+            0.05
+          ),
+        ],
+      };
+
+    case 'dance':
+      return {
+        duration: 1.3,
+        loop: true,
+        keyframes: [
+          mkC(
+            0,
+            {
+              Hips: [4, -10, 6],
+              Spine: [4, 12, -4],
+              Head: [-6, 6, 10],
+              LeftUpperArm: [-74, 0, 28],
+              RightUpperArm: [-24, 0, -20],
+              LeftLowerArm: [-68, 0, 0],
+              RightLowerArm: [-42, 0, 0],
+              LeftUpperLeg: [-18, 0, 0],
+              Tail: [14, 22, 0],
+              LeftWing: [0, 0, -24],
+              RightWing: [0, 0, 12],
+            },
+            -0.03
+          ),
+          mkC(
+            0.25,
+            {
+              Hips: [0, 0, 0],
+              Spine: [-6, 0, 0],
+              Head: [-10, 0, 0],
+              LeftUpperArm: [-52, 0, 20],
+              RightUpperArm: [-52, 0, -20],
+              Tail: [18, 0, 0],
+            },
+            0.04
+          ),
+          mkC(
+            0.5,
+            {
+              Hips: [4, 10, -6],
+              Spine: [4, -12, 4],
+              Head: [-6, -6, -10],
+              LeftUpperArm: [-24, 0, 20],
+              RightUpperArm: [-74, 0, -28],
+              LeftLowerArm: [-42, 0, 0],
+              RightLowerArm: [-68, 0, 0],
+              RightUpperLeg: [-18, 0, 0],
+              Tail: [14, -22, 0],
+              LeftWing: [0, 0, -12],
+              RightWing: [0, 0, 24],
+            },
+            -0.03
+          ),
+          mkC(
+            0.75,
+            {
+              Hips: [0, 0, 0],
+              Spine: [-6, 0, 0],
+              Head: [-10, 0, 0],
+              LeftUpperArm: [-52, 0, 20],
+              RightUpperArm: [-52, 0, -20],
+              Tail: [18, 0, 0],
+            },
+            0.04
+          ),
+        ],
+      };
+
+    case 'hurt':
+      return {
+        duration: 0.44,
+        loop: false,
+        keyframes: [
+          mkC(
+            0,
+            {
+              Spine: [-18, -12, 8],
+              Head: [-18, 12, 12],
+              LeftUpperArm: [-36, 0, 28],
+              RightUpperArm: [-28, 0, -32],
+              LeftLowerArm: [-24, 0, 0],
+              RightLowerArm: [-24, 0, 0],
+              LeftWing: [0, 0, -34],
+              RightWing: [0, 0, 34],
+              Tail: [-16, 0, 0],
+            },
+            -0.02,
+            'easeOut'
+          ),
+          mkC(0.55, { Spine: [8, 4, 0], Head: [6, 0, 0], Tail: [4, 0, 0] }, 0),
+          mkC(1.0, { Spine: [0, 0, 0], Head: [0, 0, 0] }, 0),
+        ],
+      };
+
+    default:
+      // All remaining slots (jump, swim, talk, interact, attack, swing, die, etc.)
+      // return null so buildStandardMotionPresetTemplate uses the full articulated preset mapped to critter bones!
+      return null;
   }
 }
 
@@ -1135,25 +1676,27 @@ export function buildStandardMotionPresetTemplate(
 
   if (archetype === 'critter') {
     const c = buildCritterPresetKeyframes(slot, availableSet);
-    return {
-      id: uid(),
-      name: opts.customName ?? slotMeta?.label ?? fallbackMeta?.label ?? slot,
-      slot,
-      duration: c.duration,
-      loop: c.loop,
-      autoCloseLoop: c.loop,
-      easing: 'smooth',
-      keyframes: c.keyframes,
-      events: c.events,
-      actorCategory: opts.actorCategory ?? 'buddy',
-      rigArchetype: 'critter',
-      hipsHeightRef: opts.hipsHeightRef ?? 0.36,
-      sourcePresetId: `builtin_${slot}`,
-      updatedAt: new Date().toISOString(),
-    };
+    if (c) {
+      return {
+        id: uid(),
+        name: opts.customName ?? slotMeta?.label ?? fallbackMeta?.label ?? slot,
+        slot,
+        duration: c.duration,
+        loop: c.loop,
+        autoCloseLoop: c.loop,
+        easing: 'smooth',
+        keyframes: c.keyframes,
+        events: c.events,
+        actorCategory: opts.actorCategory ?? 'buddy',
+        rigArchetype: 'critter',
+        hipsHeightRef: opts.hipsHeightRef ?? 0.36,
+        sourcePresetId: `builtin_${slot}`,
+        updatedAt: new Date().toISOString(),
+      };
+    }
   }
 
-  // Humanoid / Articulated NPC / Procedural Baddie full sequence templates
+  // Humanoid / Articulated NPC / Procedural Baddie / Critter-Humanoid fallback sequence templates
   let duration = slotMeta?.defaultDuration ?? 1.0;
   let loop = slotMeta?.loop ?? true;
   let keyframes: CustomPoseKeyframe[];
@@ -1165,7 +1708,7 @@ export function buildStandardMotionPresetTemplate(
       loop = true;
       keyframes = [
         mkFrame(0, { spine: [2, 0, 0], chest: [2, 0, 0], head: [2, 6, 2], leftUpperArm: [2, 0, -6], rightUpperArm: [-2, 0, 6], leftLowerArm: [-8, 0, 0], rightLowerArm: [-8, 0, 0] }, 0),
-        mkFrame(0.5, { spine: [4, 0, 0], chest: [4, 0, 0], head: [-2, -6, -2], leftUpperArm: [-2, 0, -8], rightUpperArm: [2, 0, 8], leftLowerArm: [-10, 0, 0], rightLowerArm: [-10, 0, 0] }, 0.015),
+        mkFrame(0.5, { spine: [4, 0, 0], chest: [4, 0, 0], head: [-2, -6, -2], leftUpperArm: [-2, 0, -8], rightUpperArm: [2, 0, 8], leftLowerArm: [-10, 0, 0], rightLowerArm: [-10, 0, 0] }, 0),
       ];
       break;
 

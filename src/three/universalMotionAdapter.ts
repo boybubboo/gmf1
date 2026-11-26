@@ -20,6 +20,7 @@ import {
   instantiateCustomModel,
   type CustomModelInstance,
 } from './gltfAssetManager';
+import type { HeroEquipmentHandles } from './heroEquipmentAttachments';
 import {
   createDefaultRigSettings,
   inspectModelSkeleton,
@@ -63,6 +64,7 @@ export interface StudioContextPropsState {
   weapon: 'none' | 'sword' | 'axe' | 'fishingPole' | 'torch';
   shield: boolean;
   showTelegraph: boolean;
+  inventoryItemId?: string | null;
 }
 
 export interface StudioActorRuntime {
@@ -78,6 +80,8 @@ export interface StudioActorRuntime {
   baddieRig?: BaddieRig;
   quadrupedRig?: QuadrupedMonsterRig;
   telegraphGroup?: THREE.Group;
+  customEquipmentHandles?: HeroEquipmentHandles | null;
+  studioAttachedGroup?: THREE.Group | null;
   customAnimations: CustomMotionPreset[];
   defaultSlotPresets: Partial<Record<CustomClipSlot, string>>;
   assetMeta?: CustomAssetMeta;
@@ -474,7 +478,9 @@ function createVirtualInstanceWrapper(opts: {
     },
     applyRigSettings: (next) => {
       rigSettings.mode = next.mode;
-      rigSettings.boneMap = { ...next.boneMap };
+      if (Object.keys(next.boneMap).length > 0 || Object.keys(rigSettings.boneMap).length === 0) {
+        rigSettings.boneMap = { ...next.boneMap };
+      }
       rigSettings.limbSwingAxis = next.limbSwingAxis;
       rigSettings.armRelaxAngle = next.armRelaxAngle;
       rigSettings.armSpreadAngle = next.armSpreadAngle;
@@ -717,7 +723,7 @@ export function instantiateStudioActor(
       hair: '#4A3121',
       skin: '#F3C7A4',
     };
-    heroRig = buildHeroModel('Hero', style);
+    heroRig = buildHeroModel(project?.heroBody || 'Adventurer', style);
     applyContextPropsToHeroRig(heroRig, contextProps ?? { weapon: 'sword', shield: true, showTelegraph: false });
     rootGroup = heroRig.group;
     modelNode = heroRig.group;

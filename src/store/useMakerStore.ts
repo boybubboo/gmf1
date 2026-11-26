@@ -7,6 +7,7 @@ import {
   defaultHUDProfile,
   DefaultCraftingRecipes,
   DefaultInventoryItems,
+  getProjectInventoryItems,
   makeWidget,
   Palette,
   projectFromTemplate,
@@ -71,6 +72,7 @@ import type {
   MotionActorTarget,
   MotionAssignmentScope,
   MotionStudioSection,
+  ObjectAttachBodyPart,
   ObjectInteractionAttributeId,
   ObjectInteractionCalibration,
   ObjectMakerDoc,
@@ -598,6 +600,7 @@ export function useMakerStore() {
   const [motionRequestedSlot, setMotionRequestedSlot] = useState<CustomClipSlot | null>(null);
   const [objectMakerOpen, setObjectMakerOpen] = useState(false);
   const [objectMakerTargetAssetId, setObjectMakerTargetAssetId] = useState<string | null>(null);
+  const [objectMakerInventoryItemId, setObjectMakerInventoryItemId] = useState<string | null>(null);
   const [plantMakerOpen, setPlantMakerOpen] = useState(false);
   const [plantMakerTargetAssetId, setPlantMakerTargetAssetId] = useState<string | null>(null);
   const [characterMakerOpen, setCharacterMakerOpen] = useState(false);
@@ -868,6 +871,8 @@ export function useMakerStore() {
       vertexPaintStrokes?: VertexPaintStroke[];
       thumbnailOverride?: string;
       keepMetricScale?: boolean;
+      attachBodyPart?: ObjectAttachBodyPart | null;
+      linkedInventoryItemId?: string | null;
     }): Promise<CustomAssetMeta> => {
       const existingMeta = opts.existingAssetId
         ? customAssets.find((a) => a.id === opts.existingAssetId)
@@ -887,6 +892,8 @@ export function useMakerStore() {
         vertexPaintStrokes: opts.vertexPaintStrokes,
         thumbnailOverride: opts.thumbnailOverride,
         keepMetricScale: opts.keepMetricScale ?? true,
+        attachBodyPart: opts.attachBodyPart,
+        linkedInventoryItemId: opts.linkedInventoryItemId,
       });
       await saveAssetRecord(meta, buffer);
       if (meta.thumbnailDataUrl) {
@@ -4155,16 +4162,34 @@ export function useMakerStore() {
       setSelectedTab('motion');
     },
     objectMakerOpen,
-    setObjectMakerOpen,
+    setObjectMakerOpen: (open: boolean) => {
+      setObjectMakerOpen(open);
+      if (!open) {
+        setObjectMakerInventoryItemId(null);
+      }
+    },
     objectMakerTargetAssetId,
     setObjectMakerTargetAssetId,
+    objectMakerInventoryItemId,
+    setObjectMakerInventoryItemId,
     openObjectMaker: (assetId?: string) => {
       setObjectMakerTargetAssetId(assetId ?? null);
+      setObjectMakerInventoryItemId(null);
       setShowingAssetVault(false);
       setPlantMakerOpen(false);
       setCharacterMakerOpen(false);
       setTreeMakerOpen(false);
       setSelectedTab('world');
+      setObjectMakerOpen(true);
+    },
+    openObjectMakerForInventoryItem: (itemId: string) => {
+      const invItem = getProjectInventoryItems(currentProject).find((i) => i.id === itemId);
+      setObjectMakerInventoryItemId(itemId);
+      setObjectMakerTargetAssetId(invItem?.customAssetId ?? null);
+      setShowingAssetVault(false);
+      setPlantMakerOpen(false);
+      setCharacterMakerOpen(false);
+      setTreeMakerOpen(false);
       setObjectMakerOpen(true);
     },
     plantMakerOpen,

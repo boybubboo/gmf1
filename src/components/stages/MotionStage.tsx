@@ -21,22 +21,22 @@ import {
   Layers,
   Lock,
   Minus,
+  Package,
   Pause,
   Play,
   Plus,
   Repeat,
   RotateCcw,
   Save,
-  Shield,
   SlidersHorizontal,
   Sparkles,
   Star,
-  Sword,
   Target,
   Trash2,
   Unlock,
   Upload,
   Wand2,
+  Wrench,
   Zap,
 } from 'lucide-react';
 import { ActionsStage } from './ActionsStage';
@@ -103,6 +103,11 @@ import {
   MOTION_SLOT_META_BY_SLOT,
   STANDARD_MOTION_SLOTS,
 } from '../../data/motionLibrary';
+import { getProjectInventoryItems } from '../../data/registries';
+import {
+  OBJECT_BODY_PART_LABELS,
+  resolveItemAttachBodyPart,
+} from '../../three/heroEquipmentAttachments';
 
 const GIZMO_SIZE_MAP: Record<'M' | 'L' | 'XL', number> = {
   M: 1.05,
@@ -263,10 +268,26 @@ export const MotionStage: React.FC<{ store: MakerStore }> = ({ store }) => {
 
   // Context Props & Compare Original (A/B) state
   const [contextProps, setContextProps] = useState<StudioContextPropsState>({
-    weapon: 'sword',
-    shield: true,
+    weapon: 'none',
+    shield: false,
     showTelegraph: false,
+    inventoryItemId: 'iron_sword',
   });
+  const inventoryItems = useMemo(
+    () => getProjectInventoryItems(store.currentProject),
+    [store.currentProject]
+  );
+  const selectedInventoryItem = useMemo(
+    () =>
+      contextProps.inventoryItemId
+        ? inventoryItems.find((i) => i.id === contextProps.inventoryItemId) ?? null
+        : null,
+    [contextProps.inventoryItemId, inventoryItems]
+  );
+  const selectedItemBodyPart = useMemo(
+    () => resolveItemAttachBodyPart(selectedInventoryItem, store.customAssets),
+    [selectedInventoryItem, store.customAssets]
+  );
   const [compareOriginal, setCompareOriginal] = useState(false);
   const [assignModalOpen, setAssignModalOpen] = useState(false);
 
@@ -997,6 +1018,7 @@ export const MotionStage: React.FC<{ store: MakerStore }> = ({ store }) => {
 
   const handleLoadPreset = (preset: CustomMotionPreset) => {
     const cloned: CustomMotionPreset = JSON.parse(JSON.stringify(preset));
+    playStartNormRef.current = 0;
     setStudioMode('pose');
     setIsPlaying(false);
     setCompareOriginal(false);
@@ -1034,6 +1056,40 @@ export const MotionStage: React.FC<{ store: MakerStore }> = ({ store }) => {
 
   const handleCreateNewDraft = (slot: CustomClipSlot) => {
     handleRevealPremadeSlot(slot, false);
+  };
+
+  const handleStartNewBlankAnimation = () => {
+    const slotToUse = draft.slot;
+    const blank: CustomMotionPreset = {
+      id: uid(),
+      name: 'New Animation',
+      slot: slotToUse,
+      duration: 3.0,
+      loop: true,
+      autoCloseLoop: true,
+      easing: 'smooth',
+      keyframes: [
+        {
+          id: uid(),
+          time: 0,
+          bones: {},
+          hipsOffsetY: 0,
+        },
+      ],
+      updatedAt: new Date().toISOString(),
+    };
+    playStartNormRef.current = 0;
+    setStudioMode('pose');
+    setIsPlaying(false);
+    setCompareOriginal(false);
+    setSavedPresetId(null);
+    setDraft(blank);
+    setPlayhead(0);
+    setWorkingBones({});
+    setWorkingHipsY(0);
+    setIsDirtyPose(false);
+    setActiveSavedPoseId(null);
+    flashToast('Started new clear 3.0s animation');
   };
 
   const updateSlotTuning = useCallback(
@@ -1431,6 +1487,18 @@ export const MotionStage: React.FC<{ store: MakerStore }> = ({ store }) => {
           </div>
 
           {hasRig && studioMode === 'pose' && (
+            <button
+              type="button"
+              onClick={handleStartNewBlankAnimation}
+              title="Start new clear animation (3.0s default, keeps current character)"
+              aria-label="Start new clear animation"
+              className="p-1.5 rounded-lg bg-[#7C5CFF] hover:bg-[#6A48F5] text-white inline-flex items-center justify-center shadow-sm transition-colors shrink-0"
+            >
+              <Plus size={15} />
+            </button>
+          )}
+
+          {hasRig && studioMode === 'pose' && (
             <input
               type="text"
               value={draft.name}
@@ -1447,7 +1515,7 @@ export const MotionStage: React.FC<{ store: MakerStore }> = ({ store }) => {
               onChange={(e) => {
                 const nextSlot = e.target.value as CustomClipSlot;
                 if (studioMode === 'pose') {
-                  handleRevealPremadeSlot(nextSlot, true);
+                  handleRevealPremadeSlot(nextSlot, false);
                 } else {
                   setDraft((prev) => ({ ...prev, slot: nextSlot }));
                 }
@@ -1789,7 +1857,7 @@ export const MotionStage: React.FC<{ store: MakerStore }> = ({ store }) => {
                             )}
                             <button
                               type="button"
-                              onClick={() => handleRevealPremadeSlot(meta.slot, true)}
+                              onClick={() => handleRevealPremadeSlot(meta.slot, false)}
                               className="px-2 py-1 rounded-lg bg-[#7C5CFF] hover:bg-[#6A48F5] text-white text-[10px] font-bold whitespace-nowrap"
                             >
                               Load &amp; Edit
@@ -1806,14 +1874,25 @@ export const MotionStage: React.FC<{ store: MakerStore }> = ({ store }) => {
               <div className="space-y-2 pt-3 border-t border-slate-200/70 dark:border-white/[0.08]">
                 <div className="flex items-center justify-between text-[11px] font-bold text-slate-500 dark:text-[#949BB0]">
                   <span>Saved Variations ({savedPresets.length})</span>
-                  <button
-                    type="button"
-                    onClick={() => handleCreateNewDraft(draft.slot)}
-                    className="text-[#7C5CFF] hover:underline inline-flex items-center gap-0.5"
-                  >
-                    <Plus size={11} />
-                    <span>Reset Slot</span>
-                  </button>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={handleStartNewBlankAnimation}
+                      title="Start new clear 3.0s animation"
+                      className="text-[#7C5CFF] hover:underline inline-flex items-center gap-0.5"
+                    >
+                      <Plus size={12} />
+                      <span>New</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleCreateNewDraft(draft.slot)}
+                      className="text-slate-500 dark:text-[#949BB0] hover:underline inline-flex items-center gap-0.5"
+                    >
+                      <RotateCcw size={10} />
+                      <span>Reset Slot</span>
+                    </button>
+                  </div>
                 </div>
 
                 {savedPresets.length === 0 ? (
@@ -2046,88 +2125,66 @@ export const MotionStage: React.FC<{ store: MakerStore }> = ({ store }) => {
             )}
           </div>
 
-          {/* Context Props Bar (Hero Sword/Shield/Axe OR Enemy Attack Telegraph Range) */}
+          {/* Context Props Bar (Inventory Object Attachment + Enemy Attack Telegraph Range) */}
           {(runtimeInfo?.hasHeroProps || runtimeInfo?.hasTelegraph) && (
-            <div className="absolute top-14 left-3 flex flex-wrap items-center gap-1 p-1 rounded-xl bg-[#171A23]/95 border border-white/[0.12] z-10">
+            <div className="absolute top-14 left-3 flex flex-wrap items-center gap-1.5 p-1.5 rounded-xl bg-[#171A23]/95 border border-white/[0.12] z-10 max-w-[calc(100%-24px)]">
               {runtimeInfo?.hasHeroProps && (
                 <>
-                  <button
-                    type="button"
-                    onClick={() =>
-                      setContextProps((p) => ({
-                        ...p,
-                        weapon: p.weapon === 'sword' ? 'none' : 'sword',
-                      }))
-                    }
-                    className={`px-2 py-1 rounded-lg text-[11px] font-bold inline-flex items-center gap-1 whitespace-nowrap ${
-                      contextProps.weapon === 'sword'
-                        ? 'bg-[#7C5CFF] text-white'
-                        : 'text-[#C8D0E4] hover:text-white hover:bg-white/10'
-                    }`}
-                  >
-                    <Sword size={11} />
-                    <span>Sword</span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() =>
-                      setContextProps((p) => ({
-                        ...p,
-                        weapon: p.weapon === 'axe' ? 'none' : 'axe',
-                      }))
-                    }
-                    className={`px-2 py-1 rounded-lg text-[11px] font-bold inline-flex items-center gap-1 whitespace-nowrap ${
-                      contextProps.weapon === 'axe'
-                        ? 'bg-[#7C5CFF] text-white'
-                        : 'text-[#C8D0E4] hover:text-white hover:bg-white/10'
-                    }`}
-                  >
-                    <span>Axe</span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() =>
-                      setContextProps((p) => ({
-                        ...p,
-                        weapon: p.weapon === 'fishingPole' ? 'none' : 'fishingPole',
-                      }))
-                    }
-                    className={`px-2 py-1 rounded-lg text-[11px] font-bold inline-flex items-center gap-1 whitespace-nowrap ${
-                      contextProps.weapon === 'fishingPole'
-                        ? 'bg-[#7C5CFF] text-white'
-                        : 'text-[#C8D0E4] hover:text-white hover:bg-white/10'
-                    }`}
-                  >
-                    <span>Rod</span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() =>
-                      setContextProps((p) => ({
-                        ...p,
-                        weapon: p.weapon === 'torch' ? 'none' : 'torch',
-                      }))
-                    }
-                    className={`px-2 py-1 rounded-lg text-[11px] font-bold inline-flex items-center gap-1 whitespace-nowrap ${
-                      contextProps.weapon === 'torch'
-                        ? 'bg-[#F59E0B] text-white'
-                        : 'text-[#C8D0E4] hover:text-white hover:bg-white/10'
-                    }`}
-                  >
-                    <span>Torch</span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setContextProps((p) => ({ ...p, shield: !p.shield }))}
-                    className={`px-2 py-1 rounded-lg text-[11px] font-bold inline-flex items-center gap-1 whitespace-nowrap ${
-                      contextProps.shield
-                        ? 'bg-[#20B46A] text-white'
-                        : 'text-[#C8D0E4] hover:text-white hover:bg-white/10'
-                    }`}
-                  >
-                    <Shield size={11} />
-                    <span>Shield</span>
-                  </button>
+                  <div className="inline-flex items-center gap-1.5 pl-1 pr-1">
+                    <Package size={12} className="text-[#7C5CFF] shrink-0" />
+                    <select
+                      value={contextProps.inventoryItemId ?? ''}
+                      onChange={(e) =>
+                        setContextProps((p) => ({
+                          ...p,
+                          inventoryItemId: e.target.value ? e.target.value : null,
+                        }))
+                      }
+                      aria-label="Load inventory object onto character"
+                      className="bg-[#1F2430] text-white text-[11px] font-bold rounded-lg px-2 py-1 border border-white/10 focus:outline-none focus:border-[#7C5CFF] max-w-[210px] cursor-pointer"
+                    >
+                      <option value="">Empty (No Object)</option>
+                      {inventoryItems.map((item) => {
+                        const part = resolveItemAttachBodyPart(item, store.customAssets);
+                        const partLabel = part ? OBJECT_BODY_PART_LABELS[part] : 'Unassigned';
+                        return (
+                          <option key={item.id} value={item.id}>
+                            {item.name} ({partLabel})
+                          </option>
+                        );
+                      })}
+                    </select>
+                  </div>
+
+                  {selectedInventoryItem && selectedItemBodyPart && (
+                    <div className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-[#20B46A]/18 text-[#34D399] text-[10px] font-bold whitespace-nowrap">
+                      <span>{OBJECT_BODY_PART_LABELS[selectedItemBodyPart]}</span>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          store.openObjectMakerForInventoryItem(selectedInventoryItem.id)
+                        }
+                        title={`Edit "${selectedInventoryItem.name}" body part in Object Editor`}
+                        className="p-0.5 rounded hover:bg-white/10 text-[#6EE7B7]"
+                      >
+                        <Wrench size={10} />
+                      </button>
+                    </div>
+                  )}
+
+                  {selectedInventoryItem && !selectedItemBodyPart && (
+                    <button
+                      type="button"
+                      onClick={() =>
+                        store.openObjectMakerForInventoryItem(selectedInventoryItem.id)
+                      }
+                      title="This inventory object has no body part assigned yet. Click to assign it in the Object Editor."
+                      className="px-2 py-1 rounded-lg bg-[#F59E0B] hover:bg-[#D97706] text-slate-950 text-[10px] font-extrabold inline-flex items-center gap-1 whitespace-nowrap shadow-sm transition-colors"
+                    >
+                      <Wrench size={10} />
+                      <span>Assign in Object Editor</span>
+                    </button>
+                  )}
                 </>
               )}
               {runtimeInfo?.hasTelegraph && (

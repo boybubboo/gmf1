@@ -29,6 +29,7 @@ import type {
   GameProject,
   MotionActorTarget,
   MotionRigArchetype,
+  VisualStyleId,
 } from '../../types/maker';
 import {
   applyContextPropsToHeroRig,
@@ -39,6 +40,8 @@ import {
   type StudioActorRuntime,
   type StudioContextPropsState,
 } from '../../three/universalMotionAdapter';
+import { getProjectInventoryItems } from '../../data/registries';
+import { applyStudioInventoryAttachment } from '../../three/heroEquipmentAttachments';
 import { buildQuickJointList } from './MotionEditorPanel';
 
 export type StageCameraPreset = 'front' | 'side' | 'back' | 'threeQuarter';
@@ -59,6 +62,7 @@ export interface OnionSkinConfig {
 const _markerPos = new THREE.Vector3();
 const _gizmoPos = new THREE.Vector3();
 const _gizmoQuat = new THREE.Quaternion();
+const _jointCenterTmp = new THREE.Vector3();
 const _raycaster = new THREE.Raycaster();
 const _ndc = new THREE.Vector2();
 
@@ -236,6 +240,8 @@ interface StageRefs {
   jointHandlesGroup: THREE.Group;
   jointHandleMeshes: Map<string, THREE.Mesh>;
   jointHitMeshes: Map<string, THREE.Mesh>;
+  jointHandleScale: number;
+  jointHandleSignature: string;
   ghostLines: THREE.LineSegments;
   ghostPoints: THREE.Points;
   floorMesh: THREE.Mesh;
@@ -533,7 +539,12 @@ export const RigPreviewStage: React.FC<RigPreviewStageProps> = ({
     });
   };
 
-  const rebuildJointHandles = (refs: StageRefs, names: string[], rig: CustomRigSettings) => {
+  const rebuildJointHandles = (
+    refs: StageRefs,
+    names: string[],
+    rig: CustomRigSettings,
+    actorRadius?: number
+  ) => {
     while (refs.jointHandlesGroup.children.length > 0) {
       const child = refs.jointHandlesGroup.children[0] as THREE.Mesh;
       refs.jointHandlesGroup.remove(child);
@@ -551,12 +562,20 @@ export const RigPreviewStage: React.FC<RigPreviewStageProps> = ({
             .filter((n) => !/end|tip|thumb|index|middle|ring|pinky|toe|eye|jaw|hair/i.test(n))
             .slice(0, 18);
 
-    const sphereGeo = new THREE.SphereGeometry(0.062, 14, 12);
-    const hitGeo = new THREE.SphereGeometry(0.125, 10, 8);
+    const handleScale =
+      typeof actorRadius === 'number' && Number.isFinite(actorRadius)
+        ? THREE.MathUtils.clamp(actorRadius * 0.85, 1.0, 2.4)
+        : 1.0;
+    refs.jointHandleScale = handleScale;
+    refs.jointHandleSignature = `${names.join(',')}|${JSON.stringify(rig.boneMap)}|${handleScale.toFixed(2)}`;
+
+    const sphereGeo = new THREE.SphereGeometry(0.062 * handleScale, 14, 12);
+    const hitGeo = new THREE.SphereGeometry(0.13 * handleScale, 10, 8);
     const hitMat = new THREE.MeshBasicMaterial({
       colorWrite: false,
       depthWrite: false,
       depthTest: false,
+      side: THREE.DoubleSide,
     });
     for (const boneName of list) {
       const mat = new THREE.MeshBasicMaterial({
@@ -576,10 +595,48 @@ export const RigPreviewStage: React.FC<RigPreviewStageProps> = ({
       hitMesh.userData.boneName = boneName;
       refs.jointHandlesGroup.add(hitMesh);
       refs.jointHitMeshes.set(boneName, hitMesh);
+
+      const node = refs.instance?.proceduralRig?.getBoneNode(boneName);
+      if (node) {
+        getBoneWorldPosition(node, _markerPos);
+        mesh.position.copy(_markerPos);
+        hitMesh.position.copy(_markerPos);
+      }
     }
     sphereGeo.dispose();
     hitGeo.dispose();
     hitMat.dispose();
+  };
+
+  const pickJointBoneAtRay = (refs: StageRefs, raycaster: THREE.Raycaster): string | null => {
+    refs.jointHandlesGroup.updateMatrixWorld(true);
+
+    const pickClosestCenter = (meshes: THREE.Mesh[]): string | null => {
+      if (meshes.length === 0) return null;
+      const hits = raycaster.intersectObjects(meshes, false);
+      if (hits.length === 0) return null;
+      let bestName: string | null = null;
+      let bestScore = Infinity;
+      for (const hit of hits) {
+        const bName = String(hit.object.userData.boneName || '');
+        if (!bName) continue;
+        hit.object.getWorldPosition(_jointCenterTmp);
+        const rayDistSq = raycaster.ray.distanceSqToPoint(_jointCenterTmp);
+        const score = rayDistSq + hit.distance * 1e-5;
+        if (score < bestScore) {
+          bestScore = score;
+          bestName = bName;
+        }
+      }
+      return bestName;
+    };
+
+    const visibleMeshes = Array.from(refs.jointHandleMeshes.values()).filter((m) => m.visible);
+    const direct = pickClosestCenter(visibleMeshes);
+    if (direct) return direct;
+
+    const hitMeshes = Array.from(refs.jointHitMeshes.values()).filter((m) => m.visible);
+    return pickClosestCenter(hitMeshes);
   };
 
   // 1. Mount persistent Three.js stage once (with automatic WebGPU -> WebGL2 fallback)
@@ -738,6 +795,8 @@ export const RigPreviewStage: React.FC<RigPreviewStageProps> = ({
       jointHandlesGroup,
       jointHandleMeshes: new Map(),
       jointHitMeshes: new Map(),
+      jointHandleScale: 1.0,
+      jointHandleSignature: '',
       ghostLines,
       ghostPoints,
       floorMesh: floor,
@@ -750,6 +809,16 @@ export const RigPreviewStage: React.FC<RigPreviewStageProps> = ({
       camGoalTarget: null,
     };
 
+    let downX = 0;
+    let downY = 0;
+    let downButton = 0;
+    let wasGizmoDown = false;
+    let downGizmoAxis: string | null = null;
+    let downJointBone: string | null = null;
+    let gizmoDragMoved = false;
+    let lastHoverTime = 0;
+    let hoveredBone: string | null = null;
+
     const onGizmoDraggingChanged = (e: { value: unknown }) => {
       const dragging = Boolean(e.value);
       refs.gizmoDragging = dragging;
@@ -760,7 +829,7 @@ export const RigPreviewStage: React.FC<RigPreviewStageProps> = ({
     };
 
     const onGizmoObjectChange = () => {
-      if (!refs.gizmoDragging) return;
+      if (!refs.gizmoDragging || !gizmoDragMoved) return;
       const cur = stateRef.current;
       const inst = refs.instance;
       if (!cur.poseMode || cur.motionPlaying || !cur.highlightBoneName || !inst?.proceduralRig) {
@@ -776,12 +845,6 @@ export const RigPreviewStage: React.FC<RigPreviewStageProps> = ({
       refs.camGoalTarget = null;
     };
 
-    let downX = 0;
-    let downY = 0;
-    let wasGizmoDown = false;
-    let lastHoverTime = 0;
-    let hoveredBone: string | null = null;
-
     const setNdcFromEvent = (ev: PointerEvent) => {
       const rect = refs.renderer.domElement.getBoundingClientRect();
       _ndc.x = ((ev.clientX - rect.left) / Math.max(1, rect.width)) * 2 - 1;
@@ -791,58 +854,109 @@ export const RigPreviewStage: React.FC<RigPreviewStageProps> = ({
     const onPointerDown = (ev: PointerEvent) => {
       downX = ev.clientX;
       downY = ev.clientY;
-      // TransformControls runs before us, so refs.gizmoDragging is already true if user touched a ring
+      downButton = ev.button;
+      // TransformControls runs before us, so refs.gizmoDragging & axis are already set if user touched a ring
       wasGizmoDown = refs.gizmoDragging;
+      downGizmoAxis = wasGizmoDown ? refs.transformControls.axis : null;
+      gizmoDragMoved = false;
+      const cur = stateRef.current;
+      if (cur.poseMode && !cur.motionPlaying && cur.showJointDots && refs.jointHandlesGroup.visible) {
+        setNdcFromEvent(ev);
+        _raycaster.setFromCamera(_ndc, camera);
+        downJointBone = pickJointBoneAtRay(refs, _raycaster);
+      } else {
+        downJointBone = null;
+      }
     };
 
     const onPointerMove = (ev: PointerEvent) => {
       const cur = stateRef.current;
+      if (refs.gizmoDragging || wasGizmoDown) {
+        const onOtherJoint = Boolean(downJointBone && downJointBone !== cur.highlightBoneName);
+        const dragDeadzone = onOtherJoint
+          ? ev.pointerType === 'touch'
+            ? 14
+            : 6
+          : ev.pointerType === 'touch'
+          ? 6
+          : 3;
+        if (Math.hypot(ev.clientX - downX, ev.clientY - downY) >= dragDeadzone) {
+          gizmoDragMoved = true;
+        }
+      }
       const domEl = refs.renderer.domElement;
-      if (!cur.poseMode || refs.gizmoDragging || ev.pointerType === 'touch') {
-        domEl.style.cursor = 'grab';
+      if (!cur.poseMode || cur.motionPlaying || refs.gizmoDragging || ev.pointerType === 'touch') {
+        if (hoveredBone !== null) hoveredBone = null;
+        domEl.style.cursor = refs.gizmoDragging ? 'grabbing' : 'grab';
         return;
       }
       const now = performance.now();
       if (now - lastHoverTime < 40) return;
       lastHoverTime = now;
 
-      setNdcFromEvent(ev);
-      _raycaster.setFromCamera(_ndc, camera);
-      const handleList = Array.from(refs.jointHitMeshes.values());
-      const hits = _raycaster.intersectObjects(handleList, false);
-      hoveredBone = hits.length > 0 ? String(hits[0].object.userData.boneName || '') : null;
+      if (cur.showJointDots && refs.jointHandlesGroup.visible) {
+        setNdcFromEvent(ev);
+        _raycaster.setFromCamera(_ndc, camera);
+        hoveredBone = pickJointBoneAtRay(refs, _raycaster);
+      } else {
+        hoveredBone = null;
+      }
       domEl.style.cursor = hoveredBone ? 'pointer' : 'grab';
+    };
+
+    const onPointerCancel = () => {
+      wasGizmoDown = false;
+      downGizmoAxis = null;
+      downJointBone = null;
+      gizmoDragMoved = false;
     };
 
     const onPointerUp = (ev: PointerEvent) => {
       const cur = stateRef.current;
       const inst = refs.instance;
-      const justDraggedGizmo = wasGizmoDown || performance.now() - refs.lastGizmoDragEndMs < 180;
+      const didDragGizmo =
+        gizmoDragMoved &&
+        (wasGizmoDown || refs.gizmoDragging || performance.now() - refs.lastGizmoDragEndMs < 180);
+      const axisOnDown = downGizmoAxis;
       wasGizmoDown = false;
-      if (!cur.poseMode || refs.gizmoDragging || justDraggedGizmo || !inst?.proceduralRig) return;
+      downGizmoAxis = null;
+      downJointBone = null;
+      gizmoDragMoved = false;
+
+      if (!cur.poseMode || cur.motionPlaying || !inst?.proceduralRig) return;
+      if (ev.pointerType !== 'touch' && downButton !== 0 && ev.button !== 0) return;
 
       const maxTapMove = ev.pointerType === 'touch' ? 16 : 6;
       const moved = Math.hypot(ev.clientX - downX, ev.clientY - downY);
-      if (moved > maxTapMove) return;
+      if (moved > maxTapMove || didDragGizmo) return;
 
       setNdcFromEvent(ev);
       _raycaster.setFromCamera(_ndc, camera);
 
-      const hitList = Array.from(refs.jointHitMeshes.values());
-      const handleHits = _raycaster.intersectObjects(hitList, false);
-      if (handleHits.length > 0) {
-        const boneName = String(handleHits[0].object.userData.boneName || '');
-        if (boneName) {
-          cur.onSelectPoseBone(boneName);
+      // 1. Always prioritize clicking joint pivot circles on a clean tap — even when the dot
+      //    sits inside the currently active gizmo's oversized invisible rotation pickers.
+      if (cur.showJointDots && refs.jointHandlesGroup.visible) {
+        const pickedBone = pickJointBoneAtRay(refs, _raycaster);
+        if (pickedBone) {
+          cur.onSelectPoseBone(pickedBone);
           return;
         }
       }
 
-      const meshHits = _raycaster.intersectObject(inst.modelRoot, true);
-      if (meshHits.length > 0) {
-        const nearest = inst.proceduralRig.findNearestBoneToWorldPoint(meshHits[0].point, 0.75);
-        if (nearest) {
-          cur.onSelectPoseBone(nearest);
+      // 2. Fallback: tapping on a character body part selects its nearest joint
+      //    (unless the tap landed directly on an X/Y/Z axis ring).
+      const touchedAxisRing = axisOnDown === 'X' || axisOnDown === 'Y' || axisOnDown === 'Z';
+      if (!touchedAxisRing) {
+        const meshHits = _raycaster.intersectObject(inst.modelRoot, true);
+        if (meshHits.length > 0) {
+          const maxMeshDist = Math.max(0.75, (refs.studioRuntime?.radius ?? 1.0) * 0.65);
+          const nearest = inst.proceduralRig.findNearestBoneToWorldPoint(
+            meshHits[0].point,
+            maxMeshDist
+          );
+          if (nearest) {
+            cur.onSelectPoseBone(nearest);
+          }
         }
       }
     };
@@ -885,6 +999,7 @@ export const RigPreviewStage: React.FC<RigPreviewStageProps> = ({
       domEl.addEventListener('pointerdown', onPointerDown);
       domEl.addEventListener('pointermove', onPointerMove);
       domEl.addEventListener('pointerup', onPointerUp);
+      domEl.addEventListener('pointercancel', onPointerCancel);
 
       refs.transformControls = transformControls;
       refs.controls = controls;
@@ -895,6 +1010,7 @@ export const RigPreviewStage: React.FC<RigPreviewStageProps> = ({
       domEl.removeEventListener('pointerdown', onPointerDown);
       domEl.removeEventListener('pointermove', onPointerMove);
       domEl.removeEventListener('pointerup', onPointerUp);
+      domEl.removeEventListener('pointercancel', onPointerCancel);
       if (refs.transformControls) {
         refs.transformControls.removeEventListener('dragging-changed', onGizmoDraggingChanged);
         refs.transformControls.removeEventListener('objectChange', onGizmoObjectChange);
@@ -1057,6 +1173,7 @@ export const RigPreviewStage: React.FC<RigPreviewStageProps> = ({
           if (targetNode) {
             getBoneWorldPosition(targetNode, _markerPos);
             refs.jointMarker.position.copy(_markerPos);
+            refs.jointMarker.scale.setScalar(refs.jointHandleScale);
             refs.jointMarker.visible = !showHandles;
           } else {
             refs.jointMarker.visible = false;
@@ -1465,7 +1582,9 @@ export const RigPreviewStage: React.FC<RigPreviewStageProps> = ({
       refs.modelContainer.add(inst.group);
 
       const loadedBones = inst.proceduralRig?.getAllBoneNames() ?? cur.boneNames;
-      rebuildJointHandles(refs, loadedBones, cur.rigSettings);
+      const initialRig =
+        Object.keys(cur.rigSettings.boneMap).length > 0 ? cur.rigSettings : inst.rigSettings;
+      rebuildJointHandles(refs, loadedBones, initialRig, runtime?.radius);
 
       const helper = new THREE.SkeletonHelper(inst.modelRoot);
       const helperMat = helper.material as THREE.LineBasicMaterial;
@@ -1526,13 +1645,51 @@ export const RigPreviewStage: React.FC<RigPreviewStageProps> = ({
       }
 
       if (runtime) {
+        const ctx = cur.contextProps;
+        if (ctx && ctx.inventoryItemId !== undefined) {
+          const item =
+            ctx.inventoryItemId === null
+              ? null
+              : getProjectInventoryItems(project).find((i) => i.id === ctx.inventoryItemId) ?? null;
+          const stageVisualStyle: VisualStyleId =
+            currentLevel?.visualStyle ?? project?.levels?.[0]?.visualStyle ?? 'painterlyPBR';
+          if (item?.customAssetId && !getCachedAssetSync(item.customAssetId)) {
+            void loadCustomAssetToCache(item.customAssetId, 'prop').then(() => {
+              if (cancelled || stageRef.current?.studioRuntime !== runtime) return;
+              applyStudioInventoryAttachment({
+                runtime,
+                item,
+                customAssets,
+                visualStyle: stageVisualStyle,
+              });
+            });
+          } else {
+            applyStudioInventoryAttachment({
+              runtime,
+              item,
+              customAssets,
+              visualStyle: stageVisualStyle,
+            });
+          }
+        }
         cur.onRuntimeReady?.({
           boneNames: loadedBones,
-          rigSettings: inst.rigSettings,
+          rigSettings: {
+            ...inst.rigSettings,
+            boneMap: { ...inst.rigSettings.boneMap },
+            slotTuning: inst.rigSettings.slotTuning
+              ? { ...inst.rigSettings.slotTuning }
+              : undefined,
+          },
           archetype: runtime.archetype,
           hipsHeightRef: runtime.hipsHeightRef,
           hasTelegraph: Boolean(runtime.telegraphGroup),
-          hasHeroProps: Boolean(runtime.heroRig && runtime.descriptor.target.kind === 'builtInHero'),
+          hasHeroProps: Boolean(
+            runtime.heroRig ||
+              runtime.instance?.proceduralRig ||
+              runtime.baddieRig ||
+              runtime.quadrupedRig
+          ),
         });
       }
     };
@@ -1611,7 +1768,25 @@ export const RigPreviewStage: React.FC<RigPreviewStageProps> = ({
       refs.instance.applyRigSettings(rigSettings);
       refs.instance.setCustomAnimations(asset.customAnimations, asset.defaultSlotPresets);
     } else {
-      refs.instance.applyRigSettings(rigSettings);
+      const hasIncomingMap = Object.keys(rigSettings.boneMap).length > 0;
+      const alreadyMapped = Boolean(refs.instance.proceduralRig?.hasMappedBones());
+      if (hasIncomingMap || !alreadyMapped) {
+        refs.instance.applyRigSettings(rigSettings);
+      }
+    }
+    if (refs.instance.proceduralRig) {
+      const loadedBones = refs.instance.proceduralRig.getAllBoneNames();
+      const handleRig =
+        Object.keys(rigSettings.boneMap).length > 0 ? rigSettings : refs.instance.rigSettings;
+      const radius = refs.studioRuntime?.radius;
+      const handleScale =
+        typeof radius === 'number' && Number.isFinite(radius)
+          ? THREE.MathUtils.clamp(radius * 0.85, 1.0, 2.4)
+          : 1.0;
+      const sig = `${loadedBones.join(',')}|${JSON.stringify(handleRig.boneMap)}|${handleScale.toFixed(2)}`;
+      if (sig !== refs.jointHandleSignature) {
+        rebuildJointHandles(refs, loadedBones, handleRig, radius);
+      }
     }
     if (stateRef.current.paused) {
       refs.instance.update(0, 1);
@@ -1627,15 +1802,58 @@ export const RigPreviewStage: React.FC<RigPreviewStageProps> = ({
     rigSettings,
   ]);
 
-  // Live toggle context props (Hero Sword/Shield/Axe + Enemy Telegraph ring)
+  // Live toggle context props (Inventory Objects attached to body parts + Enemy Telegraph ring)
   useEffect(() => {
     const rt = stageRef.current?.studioRuntime;
     if (!rt) return;
-    applyContextPropsToHeroRig(rt.heroRig, contextProps);
+    let cancelled = false;
+
+    if (contextProps?.inventoryItemId !== undefined) {
+      const item =
+        contextProps.inventoryItemId === null
+          ? null
+          : getProjectInventoryItems(project).find((i) => i.id === contextProps.inventoryItemId) ??
+            null;
+      const stageVisualStyle: VisualStyleId =
+        currentLevel?.visualStyle ?? project?.levels?.[0]?.visualStyle ?? 'painterlyPBR';
+      if (item?.customAssetId && !getCachedAssetSync(item.customAssetId)) {
+        void loadCustomAssetToCache(item.customAssetId, 'prop').then(() => {
+          if (cancelled || stageRef.current?.studioRuntime !== rt) return;
+          applyStudioInventoryAttachment({
+            runtime: rt,
+            item,
+            customAssets,
+            visualStyle: stageVisualStyle,
+          });
+        });
+      } else {
+        applyStudioInventoryAttachment({
+          runtime: rt,
+          item,
+          customAssets,
+          visualStyle: stageVisualStyle,
+        });
+      }
+    } else {
+      applyContextPropsToHeroRig(rt.heroRig, contextProps);
+    }
+
     if (rt.telegraphGroup) {
       rt.telegraphGroup.visible = Boolean(contextProps?.showTelegraph);
     }
-  }, [contextProps?.weapon, contextProps?.shield, contextProps?.showTelegraph]);
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    actorTargetKey,
+    contextProps?.inventoryItemId,
+    contextProps?.weapon,
+    contextProps?.shield,
+    contextProps?.showTelegraph,
+    project?.inventoryItems,
+    currentLevel?.visualStyle,
+    customAssets,
+  ]);
 
   useEffect(() => {
     const refs = stageRef.current;

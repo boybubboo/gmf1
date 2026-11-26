@@ -102,6 +102,10 @@ const _bonePosB = new THREE.Vector3();
 const _euler = new THREE.Euler();
 const _eulerA = new THREE.Euler();
 const _eulerB = new THREE.Euler();
+const _matRootInv = new THREE.Matrix4();
+const _footProbe = new THREE.Vector3();
+const _tmpScale = new THREE.Vector3();
+const _tmpRootScale = new THREE.Vector3();
 
 const CHAR_X = new THREE.Vector3(1, 0, 0);
 const CHAR_Y = new THREE.Vector3(0, 1, 0);
@@ -797,9 +801,17 @@ interface CapturedEyelid {
   restAngleRad: number;
 }
 
+interface CapturedFootAnchor {
+  node: THREE.Object3D;
+  localAnchor: THREE.Vector3;
+  restCharY: number;
+}
+
 export class ProceduralRigController {
   private readonly charRoot: THREE.Object3D;
   private readonly allBones = new Map<string, CapturedBone>();
+  private readonly allBonesLower = new Map<string, CapturedBone>();
+  private readonly footAnchors: CapturedFootAnchor[] = [];
   private readonly eyelids: CapturedEyelid[] = [];
   private settings: CustomRigSettings;
   private customAnimations: CustomMotionPreset[] = [];
@@ -854,7 +866,7 @@ export class ProceduralRigController {
       node.getWorldPosition(wp);
       wp.applyMatrix4(rootWorldMatInv);
 
-      this.allBones.set(node.name, {
+      const cap: CapturedBone = {
         node,
         restQuat: node.quaternion.clone(),
         restQuatInv: node.quaternion.clone().invert(),
@@ -867,8 +879,11 @@ export class ProceduralRigController {
         postClipQuat: node.quaternion.clone(),
         smoothQuat: node.quaternion.clone(),
         hasSmoothQuat: false,
-      });
+      };
+      this.allBones.set(node.name, cap);
+      this.allBonesLower.set(node.name.toLowerCase(), cap);
     }
+    this.captureFootAnchors();
 
     // Collect procedural Character Maker eyelid shells (or any node tagged with eyelidRole)
     this.eyelids.length = 0;
@@ -970,6 +985,125 @@ export class ProceduralRigController {
 
   public updateSettings(next: CustomRigSettings) {
     this.settings = { ...next, boneMap: { ...next.boneMap } };
+    this.captureFootAnchors();
+  }
+
+  private captureFootAnchors() {
+    this.footAnchors.length = 0;
+    if (this.allBones.size === 0) return;
+    this.charRoot.updateWorldMatrix(true, true);
+    _matRootInv.copy(this.charRoot.matrixWorld).invert();
+
+    const candidateNames = new Set<string>();
+    const lowerLegL = this.settings.boneMap.leftLowerLeg;
+    const lowerLegR = this.settings.boneMap.rightLowerLeg;
+    const upperLegL = this.settings.boneMap.leftUpperLeg;
+    const upperLegR = this.settings.boneMap.rightUpperLeg;
+    if (lowerLegL) candidateNames.add(lowerLegL);
+    else if (upperLegL) candidateNames.add(upperLegL);
+    if (lowerLegR) candidateNames.add(lowerLegR);
+    else if (upperLegR) candidateNames.add(upperLegR);
+
+    if (candidateNames.size === 0) {
+      this.allBones.forEach((_cap, name) => {
+        if (/^(left|right)?(lower|upper)?leg$|^leg_\d+_[lr]_(lower|foot|hip)$/i.test(name) || /foot|ankle|toe|paw/i.test(name)) {
+          candidateNames.add(name);
+        }
+      });
+    }
+
+    const pickDeepestFootNode = (startNode: THREE.Object3D): THREE.Object3D => {
+      let bestNode = startNode;
+      let bestCharY = Infinity;
+      const wp = new THREE.Vector3();
+      startNode.traverse((child) => {
+        if (child === startNode || /foot|toe|ankle|ball|paw/i.test(child.name)) {
+          if ((child as THREE.Bone).isBone || child === startNode) {
+            child.getWorldPosition(wp).applyMatrix4(_matRootInv);
+            if (wp.y < bestCharY - 0.005 || (Math.abs(wp.y - bestCharY) <= 0.005 && /toe|foot|paw/i.test(child.name))) {
+              bestCharY = wp.y;
+              bestNode = child;
+            }
+          }
+        }
+      });
+      return bestNode;
+    };
+
+    const usedNodes = new Set<THREE.Object3D>();
+    const nodeMatInv = new THREE.Matrix4();
+    const corner = new THREE.Vector3();
+    for (const cName of candidateNames) {
+      const cap = this.allBones.get(cName);
+      if (!cap) continue;
+      const anchorNode = pickDeepestFootNode(cap.node);
+      if (usedNodes.has(anchorNode)) continue;
+      usedNodes.add(anchorNode);
+
+      const localAnchor = new THREE.Vector3(0, 0, 0);
+      // For non-skinned procedural legs (boots/shoes attached directly to leg group), find lowest mesh point in node space
+      let hasChildSkinned = false;
+      anchorNode.traverse((obj) => {
+        if ((obj as THREE.SkinnedMesh).isSkinnedMesh) hasChildSkinned = true;
+      });
+      if (!hasChildSkinned) {
+        const box = new THREE.Box3();
+        let foundMesh = false;
+        anchorNode.traverse((obj) => {
+          const m = obj as THREE.Mesh;
+          if (!m.isMesh || !m.visible || /shadow/i.test(m.name)) return;
+          box.expandByObject(m);
+          foundMesh = true;
+        });
+        if (foundMesh && !box.isEmpty()) {
+          nodeMatInv.copy(anchorNode.matrixWorld).invert();
+          const cx = (box.min.x + box.max.x) * 0.5;
+          const cz = (box.min.z + box.max.z) * 0.5;
+          corner.set(cx, box.min.y, cz).applyMatrix4(nodeMatInv);
+          localAnchor.copy(corner);
+        }
+      }
+
+      const restPosChar = localAnchor.clone().applyMatrix4(anchorNode.matrixWorld).applyMatrix4(_matRootInv);
+      this.footAnchors.push({
+        node: anchorNode,
+        localAnchor,
+        restCharY: restPosChar.y,
+      });
+    }
+  }
+
+  private pinFeetToGround() {
+    if (this.footAnchors.length === 0) return;
+    const hipsName =
+      this.settings.boneMap.hips ??
+      this.resolvePresetBoneTarget('hips')?.node.name;
+    const hipsCap = hipsName ? this.allBones.get(hipsName) : undefined;
+    if (!hipsCap) return;
+
+    this.charRoot.updateWorldMatrix(true, true);
+    _matRootInv.copy(this.charRoot.matrixWorld).invert();
+
+    let maxNeededShift = -Infinity;
+    for (let i = 0; i < this.footAnchors.length; i++) {
+      const anchor = this.footAnchors[i];
+      _footProbe.copy(anchor.localAnchor).applyMatrix4(anchor.node.matrixWorld).applyMatrix4(_matRootInv);
+      const neededShift = anchor.restCharY - _footProbe.y;
+      if (neededShift > maxNeededShift) {
+        maxNeededShift = neededShift;
+      }
+    }
+    if (!Number.isFinite(maxNeededShift) || Math.abs(maxNeededShift) < 0.0002) return;
+
+    const clampedShift = THREE.MathUtils.clamp(maxNeededShift, -0.45, 0.45);
+    let parentScaleRatio = 1;
+    if (hipsCap.node.parent) {
+      hipsCap.node.parent.getWorldScale(_tmpScale);
+      this.charRoot.getWorldScale(_tmpRootScale);
+      const r = _tmpScale.y / Math.max(0.0001, _tmpRootScale.y);
+      if (r > 0.0001) parentScaleRatio = r;
+    }
+    hipsCap.node.position.y += clampedShift / parentScaleRatio;
   }
 
   public recaptureAfterFacingChange() {
@@ -997,6 +1131,7 @@ export class ProceduralRigController {
       cap.parentCharQuatInv.copy(pq).invert();
       cap.charPosX = wp.x;
     });
+    this.captureFootAnchors();
   }
 
   public hasMappedBones(): boolean {
@@ -1099,15 +1234,21 @@ export class ProceduralRigController {
   private resolvePresetBoneTarget(presetBoneName: string): CapturedBone | undefined {
     const direct = this.allBones.get(presetBoneName);
     if (direct) return direct;
+
+    const lower = presetBoneName.toLowerCase();
+    const lowerDirect = this.allBonesLower.get(lower);
+    if (lowerDirect) return lowerDirect;
+
     // Role-based fallback if the preset was saved with canonical role keys or another rig's bone names
     const mappedByRole = this.settings.boneMap[presetBoneName as RigBoneRole];
     if (mappedByRole) {
       const cap = this.allBones.get(mappedByRole);
       if (cap) return cap;
     }
-    const lower = presetBoneName.toLowerCase();
+
     const roleAlias: Record<string, RigBoneRole> = {
       hips: 'hips',
+      pelvis: 'hips',
       monsterbodypivot: 'hips',
       monsterhips: 'hips',
       spine: 'spine',
@@ -1134,6 +1275,8 @@ export class ProceduralRigController {
         const cap = this.allBones.get(mapped);
         if (cap) return cap;
       }
+      const canonicalCap = this.allBonesLower.get(role.toLowerCase());
+      if (canonicalCap) return canonicalCap;
     }
     return undefined;
   }
@@ -1238,7 +1381,9 @@ export class ProceduralRigController {
 
     const hipsY = THREE.MathUtils.lerp(keyA.hipsOffsetY ?? 0, keyB.hipsOffsetY ?? 0, alpha);
     if (Math.abs(hipsY) > 0.0005) {
-      const hipsName = this.settings.boneMap.hips;
+      const hipsName =
+        this.settings.boneMap.hips ??
+        this.resolvePresetBoneTarget('hips')?.node.name;
       const hipsCap = hipsName ? this.allBones.get(hipsName) : undefined;
       if (hipsCap) {
         const targetRef = this.getHipsHeightRef();
@@ -1252,6 +1397,9 @@ export class ProceduralRigController {
           : Math.max(0.06, hipsCap.restPos.y * 0.12);
         hipsCap.node.position.y = Math.max(minAllowY, hipsCap.restPos.y + scaledY);
       }
+    }
+    if (preset.slot === 'idle' && Math.abs(hipsY) < 0.05) {
+      this.pinFeetToGround();
     }
   }
 
@@ -1864,13 +2012,10 @@ export class ProceduralRigController {
       const leanBias = THREE.MathUtils.degToRad(slotTuning.torsoLean);
       const kneeSoft = THREE.MathUtils.clamp(slotTuning.kneeBend, 0.15, 1.85);
       const armSway = 0.032 * strength * slotTuning.armSwing;
-      const bounceMult = slotTuning.bounce;
 
       const hipsCap = this.settings.boneMap.hips ? this.allBones.get(this.settings.boneMap.hips) : undefined;
       if (hipsCap) {
-        const refLen = Math.max(0.05, Math.min(1.5, Math.abs(hipsCap.restPos.y) || 0.8));
-        const settleDrop = (0.008 * kneeSoft + Math.sin(t * 2.0 - 0.5) * 0.004 * bounceMult) * refLen * strength;
-        hipsCap.node.position.y = hipsCap.restPos.y - settleDrop;
+        hipsCap.node.position.y = hipsCap.restPos.y;
       }
 
       this.applyCharSpacePose('hips', leanBias * 0.25, Math.sin(t * 0.95) * 0.03 * strength, 0);
@@ -1897,6 +2042,7 @@ export class ProceduralRigController {
       this.applyCharSpacePose('leftLowerLeg', 0.09 * kneeSoft * strength, 0, 0, false);
       this.applyCharSpacePose('rightLowerLeg', 0.06 * kneeSoft * strength, 0, 0, true);
       this.smoothLiveBoneQuaternions(clampedDt, 16);
+      this.pinFeetToGround();
       return;
     }
 
