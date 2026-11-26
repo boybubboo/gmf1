@@ -270,8 +270,22 @@ import { InGameWorldMapModal } from './InGameWorldMapModal';
 import {
   StorybookChapterBanner,
   StorybookCoverModal,
-  StorybookEpilogueModal,
 } from './StorybookFrameOverlay';
+import {
+  EnemyHealthBar,
+  hexLuminance,
+  resolveBaddieHealthBarColors,
+  drawRoundedRectPath,
+  redrawEnemyHealthBar,
+  createEnemyHealthBar,
+} from '../../features/play/systems/enemyHealthBar';
+import { buildChestLootEntriesForEntity } from '../../features/play/systems/chestLootGenerator';
+import { PlayPauseModal } from '../../features/play/components/PlayPauseModal';
+import { RoguelikeRelicDraftModal } from '../../features/play/components/RoguelikeRelicDraftModal';
+import { PlayGameOverModal } from '../../features/play/components/PlayGameOverModal';
+import { PlayLevelCompleteModal } from '../../features/play/components/PlayLevelCompleteModal';
+import { PlayInteractionPrompts } from '../../features/play/components/PlayInteractionPrompts';
+import { PlayCutawayOverlay } from '../../features/play/components/PlayCutawayOverlay';
 
 type BaddieAIState =
   | 'patrol'
@@ -363,357 +377,8 @@ function animateCreatureRig(
   }
 }
 
-interface EnemyHealthBar {
-  group: THREE.Group;
-  mesh: THREE.Mesh;
-  mat: THREE.MeshBasicMaterial;
-  canvas: HTMLCanvasElement;
-  ctx: CanvasRenderingContext2D | null;
-  tex: THREE.CanvasTexture;
-  fillHex: string;
-  borderHex: string;
-  lastRenderedHp: number;
-  lastFillKey: number;
-  lastTrailKey: number;
-  lastColorKey: string;
-  maxHealth: number;
-  displayTrail: number;
-  opacity: number;
-  heightOffset: number;
-}
+// Note: EnemyHealthBar systems and buildChestLootEntriesForEntity extracted to src/features/play/systems/
 
-function hexLuminance(hex: string): number {
-  const clean = hex.replace('#', '');
-  if (clean.length !== 6) return 0.5;
-  const r = parseInt(clean.slice(0, 2), 16) / 255;
-  const g = parseInt(clean.slice(2, 4), 16) / 255;
-  const b = parseInt(clean.slice(4, 6), 16) / 255;
-  return 0.2126 * r + 0.7152 * g + 0.0722 * b;
-}
-
-function resolveBaddieHealthBarColors(
-  bp: MonsterBlueprint | undefined,
-  isBoss: boolean,
-  styleTint?: string
-): { fillHex: string; borderHex: string } {
-  let fillCandidate = bp?.bodyColor || styleTint || (isBoss ? '#F59E0B' : '#F2545B');
-  if (!/^#[0-9a-fA-F]{6}$/.test(fillCandidate) || hexLuminance(fillCandidate) < 0.09) {
-    fillCandidate = isBoss ? '#EF4444' : '#F2545B';
-  }
-  const accentCandidates = [bp?.bellyColor, bp?.wingColor, bp?.accentColor, bp?.eyeColor].filter(
-    (c): c is string => Boolean(c && /^#[0-9a-fA-F]{6}$/.test(c))
-  );
-  // Pick a key palette accent with strong visibility for the border + matching numeric HP text
-  let borderHex = isBoss ? '#FBBF24' : '#FCA5A5';
-  if (bp?.accentColor && /^#[0-9a-fA-F]{6}$/.test(bp.accentColor) && hexLuminance(bp.accentColor) > 0.22) {
-    borderHex = bp.accentColor;
-  } else {
-    const brightMatch = accentCandidates.find((c) => hexLuminance(c) > 0.28);
-    if (brightMatch) borderHex = brightMatch;
-  }
-  return { fillHex: fillCandidate, borderHex };
-}
-
-function drawRoundedRectPath(
-  ctx: CanvasRenderingContext2D,
-  x: number,
-  y: number,
-  w: number,
-  h: number,
-  r: number
-) {
-  const radius = Math.min(r, w * 0.5, h * 0.5);
-  ctx.beginPath();
-  ctx.moveTo(x + radius, y);
-  ctx.lineTo(x + w - radius, y);
-  ctx.quadraticCurveTo(x + w, y, x + w, y + radius);
-  ctx.lineTo(x + w, y + h - radius);
-  ctx.quadraticCurveTo(x + w, y + h, x + w - radius, y + h);
-  ctx.lineTo(x + radius, y + h);
-  ctx.quadraticCurveTo(x, y + h, x, y + h - radius);
-  ctx.lineTo(x, y + radius);
-  ctx.quadraticCurveTo(x, y, x + radius, y);
-  ctx.closePath();
-}
-
-function redrawEnemyHealthBar(
-  bar: EnemyHealthBar,
-  curHp: number,
-  maxHp: number,
-  trailRatioOverride?: number
-) {
-  const safeMax = Math.max(1, maxHp);
-  const clampedCur = Math.max(0, Math.ceil(curHp));
-  const hpRatio = THREE.MathUtils.clamp(curHp / safeMax, 0, 1);
-  const trailRatio = THREE.MathUtils.clamp(
-    trailRatioOverride ?? bar.displayTrail ?? hpRatio,
-    hpRatio,
-    1
-  );
-  const fillKey = Math.round(hpRatio * 400);
-  const trailKey = Math.round(trailRatio * 400);
-  const colorKey = `${bar.fillHex}|${bar.borderHex}`;
-
-  if (
-    bar.lastRenderedHp === clampedCur &&
-    bar.maxHealth === safeMax &&
-    bar.lastFillKey === fillKey &&
-    bar.lastTrailKey === trailKey &&
-    bar.lastColorKey === colorKey
-  ) {
-    return;
-  }
-  bar.lastRenderedHp = clampedCur;
-  bar.maxHealth = safeMax;
-  bar.lastFillKey = fillKey;
-  bar.lastTrailKey = trailKey;
-  bar.lastColorKey = colorKey;
-
-  const ctx = bar.ctx;
-  if (!ctx) return;
-  const { width, height } = bar.canvas;
-  ctx.clearRect(0, 0, width, height);
-
-  // 1. Numeric HP readout above the bar matching the border color
-  const label = `${clampedCur} / ${safeMax}`;
-  ctx.font = '900 32px system-ui, -apple-system, sans-serif';
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'middle';
-  ctx.lineJoin = 'round';
-  ctx.lineWidth = 8;
-  ctx.strokeStyle = 'rgba(10, 12, 18, 0.96)';
-  ctx.strokeText(label, width / 2, 24);
-  ctx.fillStyle = bar.borderHex || '#FBBF24';
-  ctx.fillText(label, width / 2, 24);
-
-  // 2. Outer border frame matching baddie key accent color
-  const outerX = 12;
-  const outerY = 50;
-  const outerW = width - 24;
-  const outerH = 48;
-  const pad = 6;
-  drawRoundedRectPath(ctx, outerX, outerY, outerW, outerH, 12);
-  ctx.fillStyle = bar.borderHex || '#FBBF24';
-  ctx.fill();
-
-  // 3. Dark empty background track
-  const trackX = outerX + pad;
-  const trackY = outerY + pad;
-  const trackW = outerW - pad * 2;
-  const trackH = outerH - pad * 2;
-  drawRoundedRectPath(ctx, trackX, trackY, trackW, trackH, 7);
-  ctx.fillStyle = '#131722';
-  ctx.fill();
-
-  // Clip inner track for trail + fill + gloss + segment ticks
-  ctx.save();
-  drawRoundedRectPath(ctx, trackX, trackY, trackW, trackH, 7);
-  ctx.clip();
-
-  // 4. Delayed damage-chunk trail bar
-  const trailW = trackW * trailRatio;
-  if (trailW > 1.5 && trailRatio > hpRatio + 0.002) {
-    ctx.fillStyle = '#FEF08A';
-    ctx.fillRect(trackX, trackY, trailW, trackH);
-  }
-
-  // 5. Primary solid colored HP fill (depletes left-to-right on attacks)
-  const fillW = trackW * hpRatio;
-  if (fillW > 1.5) {
-    const safeFill =
-      bar.fillHex && hexLuminance(bar.fillHex) >= 0.08 ? bar.fillHex : '#EF4444';
-    ctx.fillStyle = safeFill;
-    ctx.fillRect(trackX, trackY, fillW, trackH);
-
-    // Subtle top specular highlight so the bar feels crisp and dimensional
-    ctx.fillStyle = 'rgba(255, 255, 255, 0.26)';
-    ctx.fillRect(trackX, trackY, fillW, Math.max(4, Math.round(trackH * 0.34)));
-
-    // Subtle bottom shade
-    ctx.fillStyle = 'rgba(0, 0, 0, 0.22)';
-    ctx.fillRect(trackX, trackY + Math.round(trackH * 0.72), fillW, Math.round(trackH * 0.28));
-  }
-
-  // 6. Segment divider ticks for readable HP chunks
-  if (safeMax > 1 && safeMax <= 12) {
-    ctx.fillStyle = 'rgba(13, 16, 26, 0.65)';
-    for (let i = 1; i < safeMax; i++) {
-      const tx = Math.round(trackX + (trackW * i) / safeMax);
-      ctx.fillRect(tx - 1, trackY, 3, trackH);
-    }
-  }
-  ctx.restore();
-
-  bar.tex.needsUpdate = true;
-}
-
-function createEnemyHealthBar(
-  maxHealth: number,
-  isBoss: boolean,
-  heightOffset: number,
-  fillHex = isBoss ? '#F59E0B' : '#F2545B',
-  borderHex = isBoss ? '#FBBF24' : '#FCA5A5'
-): EnemyHealthBar {
-  const planeW = isBoss ? 1.92 : 1.32;
-  const planeH = isBoss ? 0.56 : 0.39;
-
-  const group = new THREE.Group();
-  group.visible = false;
-  group.renderOrder = 25;
-
-  const canvas = document.createElement('canvas');
-  canvas.width = 384;
-  canvas.height = 112;
-  const ctx = canvas.getContext('2d');
-  const tex = new THREE.CanvasTexture(canvas);
-  tex.colorSpace = THREE.SRGBColorSpace;
-  tex.minFilter = THREE.LinearFilter;
-  tex.magFilter = THREE.LinearFilter;
-
-  const mat = new THREE.MeshBasicMaterial({
-    map: tex,
-    transparent: true,
-    opacity: 0,
-    depthWrite: false,
-    toneMapped: false,
-    side: THREE.DoubleSide,
-  });
-  const mesh = new THREE.Mesh(new THREE.PlaneGeometry(planeW, planeH), mat);
-  mesh.renderOrder = 25;
-  group.add(mesh);
-
-  const bar: EnemyHealthBar = {
-    group,
-    mesh,
-    mat,
-    canvas,
-    ctx,
-    tex,
-    fillHex,
-    borderHex,
-    lastRenderedHp: -1,
-    lastFillKey: -1,
-    lastTrailKey: -1,
-    lastColorKey: '',
-    maxHealth,
-    displayTrail: 1,
-    opacity: 0,
-    heightOffset,
-  };
-  redrawEnemyHealthBar(bar, maxHealth, maxHealth, 1);
-  return bar;
-}
-
-function buildChestLootEntriesForEntity(
-  ent: {
-    id: string;
-    name: string;
-    loot?: string;
-    pickupItemId?: string;
-    pickupQty?: number;
-    cards?: BehaviorCard[];
-  },
-  mechs: ObjectMechanism[],
-  itemById: Map<string, InventoryItemDef>,
-  itemCatalog: InventoryItemDef[],
-  isRoguelike: boolean
-): ChestLootEntry[] {
-  const entries: ChestLootEntry[] = [];
-  const addedItemIds = new Set<string>();
-  const lowerName = ent.name.toLowerCase();
-
-  // 1. Determine coin hoard from mechanism rewards, giveTreasure cards, or chest tier
-  let coinCount = 0;
-  for (const mech of mechs) {
-    for (const trig of mech.triggers) {
-      if (trig.rewardCoins && trig.rewardCoins > 0) {
-        coinCount = Math.max(coinCount, trig.rewardCoins);
-      }
-    }
-  }
-  for (const card of ent.cards ?? []) {
-    for (const act of card.actions ?? []) {
-      if (act.key === 'giveTreasure' && act.detail) {
-        const m = act.detail.match(/(\d+)/);
-        if (m) coinCount = Math.max(coinCount, Number(m[1]));
-      }
-    }
-  }
-  if (coinCount <= 0) {
-    coinCount = lowerName.includes('vault') || lowerName.includes('boss')
-      ? 10 + Math.floor(Math.random() * 6)
-      : 4 + Math.floor(Math.random() * 5);
-  }
-
-  // 2. Include explicitly configured pickup item or mechanism reward item
-  const addItemEntry = (itemId: string, qty = 1, subtitle = 'Chest Treasure') => {
-    const def = itemById.get(itemId);
-    if (!def) return;
-    const meta = resolveItemMetadata(def);
-    addedItemIds.add(itemId);
-    entries.push({
-      uid: `${ent.id}_item_${itemId}_${entries.length}`,
-      kind: 'item',
-      qty: Math.max(1, qty),
-      label: def.name,
-      subtitle,
-      rarity: meta.rarity,
-      itemId: def.id,
-      itemDef: def,
-    });
-  };
-
-  if (ent.pickupItemId) {
-    addItemEntry(ent.pickupItemId, ent.pickupQty ?? 1, 'Featured Treasure');
-  }
-  for (const mech of mechs) {
-    for (const trig of mech.triggers) {
-      if (trig.rewardItemId && !addedItemIds.has(trig.rewardItemId)) {
-        addItemEntry(trig.rewardItemId, 1, 'Vault Reward');
-      }
-    }
-  }
-  if (lowerName.includes('crown') && !addedItemIds.has('golden_crown')) {
-    addItemEntry('golden_crown', 1, 'Royal Relic');
-  }
-  if (ent.loot?.toLowerCase().includes('health') && !addedItemIds.has('healing_tonic')) {
-    addItemEntry('healing_tonic', 1, 'Restorative Brew');
-  }
-
-  // 3. Roll 1–2 dynamic extra items so chests have varied ever-changing contents to browse
-  const pool = itemCatalog.filter(
-    (item) =>
-      item.id !== 'parachute_blanket' &&
-      item.id !== 'iron_sword' &&
-      !addedItemIds.has(item.id)
-  );
-  const targetExtraItems = entries.length === 0 ? 2 : isRoguelike || Math.random() < 0.75 ? 1 : 0;
-  if (pool.length > 0 && targetExtraItems > 0) {
-    const shuffled = [...pool].sort(() => Math.random() - 0.5);
-    for (let i = 0; i < Math.min(targetExtraItems, shuffled.length); i++) {
-      const pick = shuffled[i];
-      const qty =
-        pick.category === 'consumable' || pick.category === 'resource'
-          ? 1 + (Math.random() < 0.35 ? 1 : 0)
-          : 1;
-      addItemEntry(pick.id, qty, 'Hidden Treasure');
-    }
-  }
-
-  // 4. Add Gold Coins entry
-  if (coinCount > 0) {
-    entries.push({
-      uid: `${ent.id}_coins`,
-      kind: 'coin',
-      qty: coinCount,
-      label: 'Gold Coins',
-      subtitle: 'Gleaming Treasure',
-      rarity: coinCount >= 12 ? 'rare' : coinCount >= 6 ? 'uncommon' : 'common',
-    });
-  }
-
-  return entries;
-}
 
 interface RuntimeEntity {
   id: string;
@@ -13179,159 +12844,19 @@ export const PlayModeView: React.FC<{ store: MakerStore }> = ({ store }) => {
         </div>
       )}
 
-      {/* Treasure Chest Interaction Prompt */}
-      {controlsActive &&
-        !isChestOpeningAnim &&
-        chestInteractPrompt &&
-        !nearCraftingBench &&
-        !harvestPrompt && (
-          <div
-            className={`fixed ${
-              unlockedPowers.length > 0 ? 'bottom-32' : 'bottom-24'
-            } left-1/2 -translate-x-1/2 px-4 py-2 rounded-xl bg-[#141722]/94 border border-[#FACC15]/55 text-white text-xs font-extrabold shadow-xl z-30 flex items-center gap-2 whitespace-nowrap`}
-          >
-            <PackageOpen size={15} className="text-[#FACC15]" />
-            <span>
-              {chestInteractPrompt.locked ? (
-                <>
-                  {chestInteractPrompt.lockedMessage || (
-                    <>
-                      <span className="text-[#FACC15]">{chestInteractPrompt.label}</span> is locked — find a key!
-                    </>
-                  )}
-                </>
-              ) : chestInteractPrompt.isOpen ? (
-                <>
-                  Press <span className="px-1.5 py-0.5 mx-0.5 rounded bg-white/15 font-mono text-[11px]">E</span> to check{' '}
-                  <span className="text-[#FACC15]">{chestInteractPrompt.label}</span>{' '}
-                  <span className="text-amber-200/80 font-bold">
-                    ({chestInteractPrompt.itemCount} left)
-                  </span>
-                </>
-              ) : (
-                <>
-                  Press <span className="px-1.5 py-0.5 mx-0.5 rounded bg-white/15 font-mono text-[11px]">E</span> (Use) to open{' '}
-                  <span className="text-[#FACC15]">{chestInteractPrompt.label}</span>
-                </>
-              )}
-            </span>
-          </div>
-        )}
-
-      {/* Door / Trapdoor Interaction Prompt */}
-      {controlsActive && doorInteractPrompt && !chestInteractPrompt && !nearCraftingBench && !harvestPrompt && (
-        <div
-          className={`fixed ${
-            unlockedPowers.length > 0 ? 'bottom-32' : 'bottom-24'
-          } left-1/2 -translate-x-1/2 px-4 py-2 rounded-xl bg-[#11141D]/92 border border-[#7C5CFF]/55 text-white text-xs font-extrabold shadow-xl z-30 flex items-center gap-2 whitespace-nowrap`}
-        >
-          <span>
-            {doorInteractPrompt.locked ? (
-              <>
-                <span className="text-[#FACC15]">{doorInteractPrompt.label}</span> is locked — find a key!
-              </>
-            ) : (
-              <>
-                Press <span className="px-1.5 py-0.5 mx-0.5 rounded bg-white/15 font-mono text-[11px]">E</span> to{' '}
-                {doorInteractPrompt.isOpen ? 'close' : 'open'}{' '}
-                <span className="text-[#A78BFA]">{doorInteractPrompt.label}</span>
-              </>
-            )}
-          </span>
-        </div>
-      )}
-
-      {/* Harvest World Collectible Prompt */}
-      {controlsActive && harvestPrompt && (
-        <div
-          className={`fixed ${
-            unlockedPowers.length > 0 ? 'bottom-32' : 'bottom-24'
-          } left-1/2 -translate-x-1/2 px-4 py-2 rounded-xl bg-[#11141D]/92 border border-[#20B46A]/45 text-white text-xs font-extrabold shadow-xl z-30 flex items-center gap-2 whitespace-nowrap`}
-        >
-          <Sparkles size={14} className="text-[#4ADE80]" />
-          {harvestPrompt.method === 'interact' ? (
-            <span>
-              Press <span className="px-1.5 py-0.5 mx-0.5 rounded bg-white/15 font-mono text-[11px]">E</span> to gather{' '}
-              <span className="text-[#4ADE80]">{harvestPrompt.itemName}</span>
-            </span>
-          ) : (
-            <span>
-              Walk over {harvestPrompt.label} to collect <span className="text-[#4ADE80]">{harvestPrompt.itemName}</span>
-            </span>
-          )}
-        </div>
-      )}
-
-      {/* Sit / Stand Prompt */}
-      {controlsActive && sitPrompt && !chestInteractPrompt && !nearCraftingBench && !doorInteractPrompt && !harvestPrompt && (
-        <div
-          className={`fixed ${
-            unlockedPowers.length > 0 ? 'bottom-32' : 'bottom-24'
-          } left-1/2 -translate-x-1/2 px-4 py-2 rounded-xl bg-[#11141D]/92 border border-[#FACC15]/50 text-white text-xs font-extrabold shadow-xl z-30 flex items-center gap-2 whitespace-nowrap`}
-        >
-          <span>
-            {sitPrompt.isSitting ? (
-              <>
-                Resting · Press <span className="px-1.5 py-0.5 mx-0.5 rounded bg-white/15 font-mono text-[11px]">E / Alt</span> or move to stand up
-              </>
-            ) : (
-              <>
-                Press <span className="px-1.5 py-0.5 mx-0.5 rounded bg-white/15 font-mono text-[11px]">E / Alt</span> to sit on{' '}
-                <span className="text-[#FACC15]">{sitPrompt.label}</span>
-                {sitPrompt.label === 'Smooth River Stone' && (
-                  <span className="text-slate-300 font-normal ml-1.5">· Hit (Ctrl / F) to gather</span>
-                )}
-              </>
-            )}
-          </span>
-        </div>
-      )}
-
-      {/* Climb Prompt */}
-      {controlsActive && climbPrompt && !sitPrompt && !chestInteractPrompt && !nearCraftingBench && !doorInteractPrompt && !harvestPrompt && (
-        <div
-          className={`fixed ${
-            unlockedPowers.length > 0 ? 'bottom-32' : 'bottom-24'
-          } left-1/2 -translate-x-1/2 px-4 py-2 rounded-xl bg-[#11141D]/92 border border-[#38BDF8]/50 text-white text-xs font-extrabold shadow-xl z-30 flex items-center gap-2 whitespace-nowrap`}
-        >
-          <span>
-            {climbPrompt.active ? (
-              <>
-                Climbing <span className="text-[#38BDF8]">{climbPrompt.label}</span> · W/S Up &amp; Down · Shift/Space Jump off
-              </>
-            ) : (
-              <>
-                Walk forward into <span className="text-[#38BDF8]">{climbPrompt.label}</span> to climb
-              </>
-            )}
-          </span>
-        </div>
-      )}
-
-      {/* Parachute Blanket Glide Prompt */}
-      {controlsActive && glidePrompt && !climbPrompt && !sitPrompt && !nearCraftingBench && !doorInteractPrompt && !harvestPrompt && (
-        <div
-          className={`fixed ${
-            unlockedPowers.length > 0 ? 'bottom-32' : 'bottom-24'
-          } left-1/2 -translate-x-1/2 px-4 py-2 rounded-xl bg-[#11141D]/92 border border-[#E06D44]/60 text-white text-xs font-extrabold shadow-xl z-30 flex items-center gap-2 whitespace-nowrap`}
-        >
-          <span>
-            {glidePrompt === 'gliding' ? (
-              <>
-                <span className="text-[#F4C95D]">Parachute Blanket</span> · Hold <span className="px-1.5 py-0.5 mx-0.5 rounded bg-white/15 font-mono text-[11px]">Jump</span> to fly · Release to stow
-              </>
-            ) : glidePrompt === 'readySecond' ? (
-              <>
-                Press &amp; hold <span className="px-1.5 py-0.5 mx-0.5 rounded bg-white/15 font-mono text-[11px]">Jump</span> again to open <span className="text-[#F4C95D]">Parachute Blanket</span>
-              </>
-            ) : (
-              <>
-                Double-press &amp; hold <span className="px-1.5 py-0.5 mx-0.5 rounded bg-white/15 font-mono text-[11px]">Jump</span> to open <span className="text-[#F4C95D]">Parachute Blanket</span>
-              </>
-            )}
-          </span>
-        </div>
-      )}
+      {/* World Interaction Prompts */}
+      <PlayInteractionPrompts
+        controlsActive={controlsActive}
+        unlockedPowersCount={unlockedPowers.length}
+        nearCraftingBench={nearCraftingBench}
+        isChestOpeningAnim={isChestOpeningAnim}
+        chestInteractPrompt={chestInteractPrompt}
+        doorInteractPrompt={doorInteractPrompt}
+        harvestPrompt={harvestPrompt}
+        sitPrompt={sitPrompt}
+        climbPrompt={climbPrompt}
+        glidePrompt={glidePrompt}
+      />
 
       {/* Quick Misfit Powers + Held-Tool Bar + Subtle Control Hint */}
       {controlsActive && !activeBottomSpeech && !isDrivingMode && (
@@ -13636,63 +13161,13 @@ export const PlayModeView: React.FC<{ store: MakerStore }> = ({ store }) => {
       )}
 
       {/* Live Cutaway Letterbox Bars, "Meanwhile..." Caption, Narrator Storybook Banner & Skip */}
-      {!showTitle && activeCutawayHud && (
-        <div className="pointer-events-none fixed inset-0 z-30 flex flex-col justify-between">
-          {/* Top Cinema Bar + Meanwhile Caption */}
-          <div
-            className={`w-full transition-all duration-300 flex items-center justify-between px-4 sm:px-8 ${
-              activeCutawayHud.showLetterbox
-                ? 'h-14 sm:h-16 bg-black/92 border-b border-white/10'
-                : 'pt-16 pb-2'
-            }`}
-          >
-            <div className="inline-flex items-center gap-2 px-3 py-1 rounded-xl bg-black/75 border border-white/15 text-white text-xs font-extrabold shadow-lg">
-              <Clapperboard size={13} className="text-[#F59E0B]" />
-              <span>
-                {activeCutawayHud.caption?.trim() || activeCutawayHud.skitName}
-              </span>
-              {activeCutawayHud.totalBeats > 1 && (
-                <span className="text-white/55 tabular-nums font-bold">
-                  {activeCutawayHud.beatIndex + 1}/{activeCutawayHud.totalBeats}
-                </span>
-              )}
-            </div>
-
-            <button
-              type="button"
-              onClick={() => {
-                skipCutawaySignalRef.current = true;
-              }}
-              className="pointer-events-auto inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white/15 hover:bg-white/25 text-white text-xs font-extrabold border border-white/20 transition-colors"
-            >
-              <SkipForward size={13} />
-              <span>Skip (Space)</span>
-            </button>
-          </div>
-
-          {/* Bottom Cinema Bar / Storybook Narrator Caption */}
-          <div
-            className={`w-full transition-all duration-300 flex flex-col items-center justify-end pb-4 px-4 ${
-              activeCutawayHud.showLetterbox
-                ? 'min-h-16 sm:min-h-20 bg-black/92 border-t border-white/10 pt-3'
-                : 'pb-8'
-            }`}
-          >
-            {activeCutawayHud.narratorText?.trim() && (
-              <div className="max-w-2xl w-full rounded-2xl bg-[#181B26]/95 border border-amber-300/35 px-5 py-3 text-center shadow-2xl">
-                {activeCutawayHud.speakerLabel && (
-                  <div className="text-[10px] font-black uppercase tracking-widest text-amber-300 mb-0.5">
-                    {activeCutawayHud.speakerLabel}
-                  </div>
-                )}
-                <p className="text-sm sm:text-base font-serif font-medium text-amber-50 leading-snug">
-                  {activeCutawayHud.narratorText}
-                </p>
-              </div>
-            )}
-          </div>
-        </div>
-      )}
+      <PlayCutawayOverlay
+        show={!showTitle}
+        cutaway={activeCutawayHud}
+        onSkip={() => {
+          skipCutawaySignalRef.current = true;
+        }}
+      />
 
       {/* Bottom-of-Screen Chat Panel Mode Overlay */}
       {!showTitle && chatSettings.displayMode === 'bottomPanel' && activeBottomSpeech && (
@@ -13851,367 +13326,81 @@ export const PlayModeView: React.FC<{ store: MakerStore }> = ({ store }) => {
         ))}
 
       {/* Pause Modal */}
-      {paused && !finished && !dead && !roguelikeRun.draftOptions && (
-        <div className="fixed inset-0 z-30 flex items-center justify-center bg-black/70 p-4">
-          <div className="w-full max-w-xs rounded-3xl bg-white dark:bg-[#171A23] text-slate-900 dark:text-[#F3F5FA] border border-slate-200/80 dark:border-white/[0.1] p-6 text-center shadow-2xl space-y-3">
-            <h2 className="text-xl font-black">Paused</h2>
-            <button
-              type="button"
-              onClick={() => setPaused(false)}
-              className="w-full py-2.5 rounded-xl bg-[#7C5CFF] text-white text-sm font-bold"
-            >
-              Keep Playing
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                setPaused(false);
-                setFastTravelState(null);
-                setWorldMapOpen(true);
-              }}
-              className="w-full py-2.5 rounded-xl bg-[#0EA5E9]/15 text-[#0284C7] dark:text-[#38BDF8] text-sm font-bold"
-            >
-              World Map (M)
-            </button>
-            <button
-              type="button"
-              onClick={handleRestart}
-              className="w-full py-2.5 rounded-xl bg-slate-100 dark:bg-[#1F2430] text-sm font-bold"
-            >
-              {isRoguelike ? 'Restart Run' : 'Restart Level'}
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                AudioEngine.stopMusic();
-                store.setPlayFromPoint(null);
-                store.setIsPlaying(false);
-              }}
-              className="w-full py-2.5 rounded-xl bg-[#F2545B]/12 text-sm font-bold text-[#F2545B]"
-            >
-              Back to Editor
-            </button>
-          </div>
-        </div>
-      )}
+      <PlayPauseModal
+        isOpen={Boolean(paused && !finished && !dead && !roguelikeRun.draftOptions)}
+        isRoguelike={isRoguelike}
+        onResume={() => setPaused(false)}
+        onOpenWorldMap={() => {
+          setPaused(false);
+          setFastTravelState(null);
+          setWorldMapOpen(true);
+        }}
+        onRestart={handleRestart}
+        onBackToEditor={() => {
+          AudioEngine.stopMusic();
+          store.setPlayFromPoint(null);
+          store.setIsPlaying(false);
+        }}
+      />
 
       {/* Roguelike Floor Cleared — 3-Choice Relic Draft Modal */}
-      {isRoguelike && roguelikeRun.draftOptions && !dead && !finished && (
-        <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
-          <div className="w-full max-w-3xl rounded-3xl bg-[#12151E] text-[#F3F5FA] border border-white/12 p-6 md:p-7 shadow-2xl space-y-5 maker-panel-rise">
-            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/10 pb-4">
-              <div className="space-y-1">
-                <div className="text-[11px] font-bold uppercase tracking-wider text-[#F59E0B] tabular-nums">
-                  Floor {roguelikeRun.floorNumber} Cleared · Descending to Floor {roguelikeRun.floorNumber + 1}
-                </div>
-                <h2 className="text-2xl font-black tracking-tight">Choose a Relic</h2>
-              </div>
-              <div className="text-right text-xs text-white/65 tabular-nums">
-                <div>{roguelikeRun.enemiesSlain} foes slain</div>
-                <div>{roguelikeRun.activeRelics.length} relics carried</div>
-              </div>
-            </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-3.5">
-              {roguelikeRun.draftOptions.map((relic) => {
-                const ownedCount = roguelikeRun.activeRelics.filter((id) => id === relic.id).length;
-                return (
-                  <button
-                    key={relic.id}
-                    type="button"
-                    onClick={() => handleSelectRelic(relic)}
-                    className="group text-left rounded-2xl bg-[#181C28] hover:bg-[#1E2333] border border-white/10 hover:border-white/25 p-4 flex flex-col justify-between gap-4 transition-colors duration-150"
-                  >
-                    <div className="space-y-3">
-                      <div className="flex items-center justify-between gap-2">
-                        <span
-                          className="text-[10px] font-extrabold uppercase tracking-wider"
-                          style={{
-                            color:
-                              relic.rarity === 'mythic'
-                                ? '#F59E0B'
-                                : relic.rarity === 'rare'
-                                ? '#38BDF8'
-                                : '#94A3B8',
-                          }}
-                        >
-                          {relic.rarity} · {relic.category}
-                        </span>
-                        {ownedCount > 0 && (
-                          <span className="text-[10px] font-bold text-white/55 tabular-nums">
-                            Owned ×{ownedCount}
-                          </span>
-                        )}
-                      </div>
-
-                      <div className="flex items-center gap-3">
-                        <div
-                          className="w-11 h-11 rounded-xl flex items-center justify-center shrink-0 border border-white/10"
-                          style={{ backgroundColor: `${relic.colorHex}22`, color: relic.colorHex }}
-                        >
-                          <MakerIcon symbol={relic.symbol} size={20} />
-                        </div>
-                        <div className="min-w-0">
-                          <div className="text-base font-black text-white leading-tight">
-                            {relic.name}
-                          </div>
-                          <div
-                            className="text-xs font-extrabold mt-0.5"
-                            style={{ color: relic.colorHex }}
-                          >
-                            {relic.shortEffect}
-                          </div>
-                        </div>
-                      </div>
-
-                      <p className="text-xs text-white/70 leading-relaxed">{relic.description}</p>
-                    </div>
-
-                    <div className="pt-2 border-t border-white/8 flex items-center justify-between text-xs font-extrabold text-white/85 group-hover:text-white whitespace-nowrap">
-                      <span>Select Relic</span>
-                      <ChevronRight
-                        size={15}
-                        className="text-white/50 group-hover:translate-x-0.5 transition-transform duration-150"
-                      />
-                    </div>
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-        </div>
-      )}
+      <RoguelikeRelicDraftModal
+        isOpen={Boolean(isRoguelike && roguelikeRun.draftOptions && !dead && !finished)}
+        floorNumber={roguelikeRun.floorNumber}
+        enemiesSlain={roguelikeRun.enemiesSlain}
+        activeRelics={roguelikeRun.activeRelics}
+        draftOptions={roguelikeRun.draftOptions}
+        onSelectRelic={handleSelectRelic}
+      />
 
       {/* Out of Health / Permadeath Run Summary Modal */}
-      {dead && isRoguelike ? (
-        (() => {
-          const summary = roguelikeRun.runSummary ?? {
-            floorReached: roguelikeRun.floorNumber,
-            enemiesSlain: roguelikeRun.enemiesSlain,
-            bossesSlain: roguelikeRun.bossesSlain,
-            coinsEarned: roguelikeRun.coinsEarned,
-            relicIds: roguelikeRun.activeRelics,
-            runSeed: roguelikeRun.runSeed,
-          };
-          const relicCounts = new Map<string, number>();
-          for (const id of summary.relicIds) {
-            relicCounts.set(id, (relicCounts.get(id) ?? 0) + 1);
-          }
-          const collectedRelics = Array.from(relicCounts.entries())
-            .map(([id, count]) => ({ def: getRelicById(id), count }))
-            .filter((x): x is { def: RoguelikeRelicDef; count: number } => Boolean(x.def));
-
-          return (
-            <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
-              <div className="w-full max-w-md rounded-3xl bg-[#12151E] text-[#F3F5FA] border border-white/12 p-6 shadow-2xl space-y-5 maker-panel-rise">
-                <div className="text-center space-y-2">
-                  <div className="mx-auto w-14 h-14 rounded-2xl bg-[#E11D48]/18 border border-[#E11D48]/35 text-[#FB7185] flex items-center justify-center">
-                    <Skull size={28} />
-                  </div>
-                  <h2 className="text-2xl font-black">Run Ended</h2>
-                  <p className="text-xs text-white/65 tabular-nums">
-                    Fallen on Floor {summary.floorReached} · Run Seed #{summary.runSeed}
-                  </p>
-                </div>
-
-                <div className="grid grid-cols-2 gap-2.5">
-                  <div className="rounded-2xl bg-[#181C28] border border-white/8 p-3">
-                    <div className="text-[10px] font-bold uppercase tracking-wider text-white/50">
-                      Floor Reached
-                    </div>
-                    <div className="text-xl font-black tabular-nums mt-0.5">
-                      {summary.floorReached}
-                    </div>
-                  </div>
-                  <div className="rounded-2xl bg-[#181C28] border border-white/8 p-3">
-                    <div className="text-[10px] font-bold uppercase tracking-wider text-white/50">
-                      Foes Slain
-                    </div>
-                    <div className="text-xl font-black tabular-nums mt-0.5">
-                      {summary.enemiesSlain}
-                    </div>
-                  </div>
-                  <div className="rounded-2xl bg-[#181C28] border border-white/8 p-3">
-                    <div className="text-[10px] font-bold uppercase tracking-wider text-white/50">
-                      Bosses Slain
-                    </div>
-                    <div className="text-xl font-black tabular-nums text-[#F59E0B] mt-0.5">
-                      {summary.bossesSlain}
-                    </div>
-                  </div>
-                  <div className="rounded-2xl bg-[#181C28] border border-white/8 p-3">
-                    <div className="text-[10px] font-bold uppercase tracking-wider text-white/50">
-                      Coins Earned
-                    </div>
-                    <div className="text-xl font-black tabular-nums text-[#FACC15] mt-0.5">
-                      {summary.coinsEarned}
-                    </div>
-                  </div>
-                </div>
-
-                {collectedRelics.length > 0 && (
-                  <div className="space-y-2">
-                    <div className="text-[10px] font-bold uppercase tracking-wider text-white/50">
-                      Relics Drafted ({summary.relicIds.length})
-                    </div>
-                    <div className="flex flex-wrap gap-1.5">
-                      {collectedRelics.map(({ def, count }) => (
-                        <div
-                          key={def.id}
-                          className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-[#181C28] border border-white/10 text-[11px] font-bold"
-                          title={def.shortEffect}
-                        >
-                          <span style={{ color: def.colorHex }}>
-                            <MakerIcon symbol={def.symbol} size={12} />
-                          </span>
-                          <span>{def.name}</span>
-                          {count > 1 && (
-                            <span className="text-white/50 tabular-nums">×{count}</span>
-                          )}
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
-
-                <div className="space-y-2 pt-1">
-                  <button
-                    type="button"
-                    onClick={handleRestart}
-                    className="w-full py-3 rounded-xl bg-[#E11D48] hover:opacity-95 text-white text-sm font-extrabold inline-flex items-center justify-center gap-2 whitespace-nowrap"
-                  >
-                    <RotateCcw size={15} />
-                    <span>Start New Run</span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      AudioEngine.stopMusic();
-                      store.setPlayFromPoint(null);
-                      store.setIsPlaying(false);
-                    }}
-                    className="w-full py-2.5 rounded-xl bg-white/8 hover:bg-white/12 text-xs font-bold text-white/75"
-                  >
-                    Back to Editor
-                  </button>
-                </div>
-              </div>
-            </div>
-          );
-        })()
-      ) : dead ? (
-        <div className="fixed inset-0 z-30 flex items-center justify-center bg-black/75 p-4">
-          <div className="w-full max-w-sm rounded-3xl bg-white dark:bg-[#171A23] text-slate-900 dark:text-[#F3F5FA] border border-slate-200/80 dark:border-white/[0.1] p-6 text-center shadow-2xl space-y-4">
-            <div className="flex justify-center">
-              <IconBadge symbol="heart.slash.fill" tint="#F2545B" size={56} />
-            </div>
-            <div>
-              <h2 className="text-xl font-black">Ouch! Out of health</h2>
-              <p className="text-xs text-slate-500 dark:text-[#949BB0] mt-1">
-                Give it another go! Use Ctrl or F to swing your sword or dodge traps.
-              </p>
-            </div>
-            <div className="space-y-2">
-              <button
-                type="button"
-                onClick={handleRestart}
-                className="w-full py-3 rounded-xl bg-[#7C5CFF] text-white text-sm font-bold"
-              >
-                Try Again
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  AudioEngine.stopMusic();
-                  store.setPlayFromPoint(null);
-                  store.setIsPlaying(false);
-                }}
-                className="w-full py-2.5 rounded-xl bg-slate-100 dark:bg-[#1F2430] text-xs font-bold text-slate-600 dark:text-[#949BB0]"
-              >
-                Back to Editor
-              </button>
-            </div>
-          </div>
-        </div>
-      ) : null}
+      <PlayGameOverModal
+        isDead={dead}
+        isRoguelike={isRoguelike}
+        roguelikeSummary={
+          dead && isRoguelike
+            ? roguelikeRun.runSummary ?? {
+                floorReached: roguelikeRun.floorNumber,
+                enemiesSlain: roguelikeRun.enemiesSlain,
+                bossesSlain: roguelikeRun.bossesSlain,
+                coinsEarned: roguelikeRun.coinsEarned,
+                relicIds: roguelikeRun.activeRelics,
+                runSeed: roguelikeRun.runSeed,
+              }
+            : null
+        }
+        onRestart={handleRestart}
+        onBackToEditor={() => {
+          AudioEngine.stopMusic();
+          store.setPlayFromPoint(null);
+          store.setIsPlaying(false);
+        }}
+      />
 
       {/* Level Complete / Storybook Epilogue Modal */}
-      {finished &&
-        (currentProject.storybook?.enabled ? (
-          <StorybookEpilogueModal
-            project={currentProject}
-            level={currentLevel}
-            storybook={currentProject.storybook}
-            elapsedSec={elapsedSec}
-            coins={hudState.coins}
-            buddiesFound={buddyHud.found}
-            buddiesTotal={buddyHud.total}
-            puzzlesSolved={storyStats.puzzlesSolved}
-            crittersWarmed={storyStats.crittersWarmed}
-            nextLevel={nextLevel}
-            onNextLevel={() => {
-              if (!nextLevel) return;
-              store.setSelectedLevelID(nextLevel.id);
-              setFinished(false);
-              setResetTick((t) => t + 1);
-            }}
-            onPlayAgain={handleRestart}
-            onBackToEditor={() => {
-              AudioEngine.stopMusic();
-              store.setPlayFromPoint(null);
-              store.setIsPlaying(false);
-            }}
-          />
-        ) : (
-          <div className="fixed inset-0 z-30 flex items-center justify-center bg-black/70 p-4">
-            <div className="w-full max-w-sm rounded-3xl bg-white dark:bg-[#171A23] text-slate-900 dark:text-[#F3F5FA] border border-slate-200/80 dark:border-white/[0.1] p-6 text-center shadow-2xl space-y-4">
-              <div className="flex justify-center">
-                <div className="w-16 h-16 rounded-2xl bg-[#20B46A]/15 text-[#20B46A] flex items-center justify-center">
-                  <Sparkles size={32} />
-                </div>
-              </div>
-              <div>
-                <h2 className="text-2xl font-black">Level Complete!</h2>
-                <p className="text-xs text-slate-500 dark:text-[#949BB0] mt-1">
-                  Finished {currentLevel.name} in {elapsedSec}s with {hudState.coins} coins.
-                </p>
-              </div>
-              <div className="space-y-2">
-                {nextLevel && (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      store.setSelectedLevelID(nextLevel.id);
-                      setFinished(false);
-                      setResetTick((t) => t + 1);
-                    }}
-                    className="w-full py-3 rounded-xl bg-[#20B46A] text-white text-sm font-bold"
-                  >
-                    Next Level: {nextLevel.name}
-                  </button>
-                )}
-                <button
-                  type="button"
-                  onClick={handleRestart}
-                  className="w-full py-2.5 rounded-xl bg-[#7C5CFF]/15 text-[#7C5CFF] text-sm font-bold"
-                >
-                  Play Again
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    AudioEngine.stopMusic();
-                    store.setPlayFromPoint(null);
-                    store.setIsPlaying(false);
-                  }}
-                  className="w-full py-2.5 rounded-xl bg-slate-100 dark:bg-[#1F2430] text-xs font-bold text-slate-600 dark:text-[#949BB0]"
-                >
-                  Back to Editor
-                </button>
-              </div>
-            </div>
-          </div>
-        ))}
+      <PlayLevelCompleteModal
+        finished={finished}
+        project={currentProject}
+        level={currentLevel}
+        storybook={currentProject.storybook}
+        elapsedSec={elapsedSec}
+        coins={hudState.coins}
+        buddyHud={buddyHud}
+        storyStats={storyStats}
+        nextLevel={nextLevel}
+        onNextLevel={() => {
+          if (!nextLevel) return;
+          store.setSelectedLevelID(nextLevel.id);
+          setFinished(false);
+          setResetTick((t) => t + 1);
+        }}
+        onPlayAgain={handleRestart}
+        onBackToEditor={() => {
+          AudioEngine.stopMusic();
+          store.setPlayFromPoint(null);
+          store.setIsPlaying(false);
+        }}
+      />
     </div>
   );
 };

@@ -1,3 +1,4 @@
+export * from '../features/world/environment/islandAtmosphere';
 import * as THREE from 'three';
 import {
   MeshBasicNodeMaterial,

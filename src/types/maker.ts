@@ -1,3 +1,51 @@
+import type {
+  BonePoseAngles,
+  CreatureBodyId,
+  CustomClipSlot,
+  CustomMotionPreset,
+  CustomPoseKeyframe,
+  CustomRigSettings,
+  MotionActorCategory,
+  MotionActorTarget,
+  MotionAssignmentScope,
+  MotionEasing,
+  MotionEventKind,
+  MotionEventMarker,
+  MotionFitReport,
+  MotionFitWarning,
+  MotionFitWarningCode,
+  MotionRigArchetype,
+  RigAnimationMode,
+  RigBoneRole,
+  RigSwingAxis,
+  SavedPosePreset,
+  SlotMotionTuning,
+} from './motion';
+
+import type {
+  CraftingRecipe,
+  CraftingRecipeCategory,
+  GameInventoryConfig,
+  HeroEquipment,
+  InventoryCategoryConfig,
+  InventoryCustomStat,
+  InventoryItemCategory,
+  InventoryItemDef,
+  InventoryStack,
+  InventoryStatProfile,
+  ItemMetadata,
+  ItemRarity,
+  ObjectAttachBodyPart,
+  PickupMeshKind,
+  ToolActionKind,
+  WearSlot,
+  WorldCollectibleRule,
+  WorldCollectibleScatterKind,
+} from './inventory';
+
+export * from './motion';
+export * from './inventory';
+
 export type StudioTheme = 'dark' | 'light';
 
 export type VisualStyleId = 'painterlyPBR' | 'celToon' | 'softFantasy';
@@ -33,225 +81,6 @@ export interface ObjectInteractionCalibration {
   offset: [number, number, number];
   yawDeg: number;
   presetId?: string;
-}
-
-export type CustomClipSlot =
-  | 'idle'
-  | 'walk'
-  | 'run'
-  | 'jump'
-  | 'swim'
-  | 'attack'
-  | 'interact'
-  | 'sit'
-  | 'hold'
-  | 'swing'
-  | 'throw'
-  | 'sleep'
-  | 'fishing'
-  | 'lift'
-  | 'pull'
-  | 'push'
-  | 'dig'
-  | 'climbVertical'
-  | 'climbStairs'
-  | 'crouch'
-  | 'sneak'
-  | 'stab'
-  | 'bowPull'
-  | 'hug'
-  | 'punch'
-  | 'kick'
-  // Hero defense, combat reactions & celebration
-  | 'block'
-  | 'parry'
-  | 'knockdown'
-  | 'getUp'
-  | 'hurt'
-  | 'die'
-  | 'celebrate'
-  | 'wave'
-  | 'dance'
-  // NPC & Buddy expressions / misfit skills
-  | 'talk'
-  | 'laugh'
-  | 'cheer'
-  | 'shy'
-  | 'grumpy'
-  | 'misfitPower'
-  // Enemies, Flyers & Bosses (windup clues, attacks, reactions & death)
-  | 'fly'
-  | 'windup_headSway3'
-  | 'windup_footMarch'
-  | 'windup_wingFlare'
-  | 'windup_crouchPounce'
-  | 'fireBreath'
-  | 'iceBreath'
-  | 'waterJet'
-  | 'electricShock'
-  | 'poisonSpit'
-  | 'shadowBeam'
-  | 'solarBeam'
-  | 'groundPound'
-  | 'clawSlash'
-  | 'tailSmash'
-  | 'chargeGore'
-  | 'sonicRoar'
-  | 'stagger'
-  | 'dying';
-
-export type MotionActorCategory = 'hero' | 'npc' | 'buddy' | 'enemy';
-
-export type MotionRigArchetype = 'humanoid' | 'critter' | 'quadruped' | 'baddie';
-
-export type MotionEventKind =
-  | 'windupLock'
-  | 'impactStart'
-  | 'impactEnd'
-  | 'footstep'
-  | 'grounded'
-  | 'impact'
-  | 'recover'
-  | 'collapse'
-  | 'custom';
-
-export interface MotionEventMarker {
-  id: string;
-  time: number; // normalized [0, 1]
-  kind: MotionEventKind;
-  label?: string;
-}
-
-export type MotionFitWarningCode =
-  | 'tooLong'
-  | 'tooShort'
-  | 'floorClip'
-  | 'extremeAngle'
-  | 'boneMismatch'
-  | 'missingOptionalPart'
-  | 'loopSeamJump';
-
-export interface MotionFitWarning {
-  code: MotionFitWarningCode;
-  severity: 'info' | 'caution';
-  message: string;
-}
-
-export interface MotionFitReport {
-  status: 'safe' | 'caution';
-  warnings: MotionFitWarning[];
-  matchedBoneCount: number;
-  totalPresetBones: number;
-  loopSeamDeg: number;
-}
-
-export type MotionActorTarget =
-  | { kind: 'builtInHero'; category: 'hero'; label: string }
-  | { kind: 'customAsset'; category: MotionActorCategory; assetId: string; label: string }
-  | { kind: 'proceduralNpc'; category: 'npc'; entityId?: string; label: string }
-  | { kind: 'buddyCritter'; category: 'buddy'; creatureType: CreatureBodyId; entityId?: string; label: string }
-  | { kind: 'proceduralBaddie'; category: 'enemy'; variant: 'ground' | 'flyer' | 'boss'; entityId?: string; label: string }
-  | { kind: 'monsterBlueprint'; category: 'enemy'; monsterId: string; entityId?: string; label: string };
-
-export type MotionAssignmentScope =
-  | 'heroDefault'
-  | 'npcDefault'
-  | 'buddyDefault'
-  | 'baddieDefault'
-  | 'monsterBlueprint'
-  | 'entityOverride'
-  | 'customAsset';
-
-export type RigBoneRole =
-  | 'hips'
-  | 'spine'
-  | 'chest'
-  | 'neck'
-  | 'head'
-  | 'leftUpperArm'
-  | 'leftLowerArm'
-  | 'rightUpperArm'
-  | 'rightLowerArm'
-  | 'leftUpperLeg'
-  | 'leftLowerLeg'
-  | 'rightUpperLeg'
-  | 'rightLowerLeg';
-
-export type RigAnimationMode = 'auto' | 'clips' | 'procedural';
-
-export type RigSwingAxis = 'auto' | 'x' | '-x' | 'y' | '-y' | 'z' | '-z';
-
-export interface SlotMotionTuning {
-  speedMultiplier: number;
-  strideLength: number;
-  kneeBend: number;
-  armSwing: number;
-  armSideOffsetDeg: number;
-  bounce: number;
-  torsoLean: number;
-}
-
-export interface CustomRigSettings {
-  mode: RigAnimationMode;
-  boneMap: Partial<Record<RigBoneRole, string>>;
-  limbSwingAxis: RigSwingAxis;
-  armRelaxAngle: number;
-  armSpreadAngle: number;
-  idleArmSpreadAngle: number;
-  mirrorArmRelax: boolean;
-  mirrorLimbSwing: boolean;
-  motionStrength: number;
-  headMotion: number;
-  facingOffsetDeg: number;
-  armRelaxAutoVersion?: number;
-  slotTuning?: Partial<Record<CustomClipSlot, Partial<SlotMotionTuning>>>;
-}
-
-export type MotionEasing = 'linear' | 'smooth' | 'easeIn' | 'easeOut' | 'elastic';
-
-/** Character-space Euler delta angles [rxDeg, ryDeg, rzDeg] relative to a bone's rest pose */
-export type BonePoseAngles = [number, number, number];
-
-export interface CustomPoseKeyframe {
-  id: string;
-  /** Normalized timeline position in [0, 1] */
-  time: number;
-  /** Map of boneName -> [rxDeg, ryDeg, rzDeg] character-space delta angles */
-  bones: Record<string, BonePoseAngles>;
-  /** Optional vertical hips bounce offset in model units */
-  hipsOffsetY?: number;
-  /** Optional per-segment easing override from this keyframe to the next */
-  easing?: MotionEasing;
-}
-
-export interface CustomMotionPreset {
-  id: string;
-  name: string;
-  slot: CustomClipSlot;
-  duration: number;
-  loop: boolean;
-  autoCloseLoop?: boolean;
-  easing: MotionEasing;
-  keyframes: CustomPoseKeyframe[];
-  updatedAt: string;
-  /** Optional Universal Motion Studio provenance & retargeting metadata */
-  actorCategory?: MotionActorCategory;
-  rigArchetype?: MotionRigArchetype;
-  hipsHeightRef?: number;
-  sourcePresetId?: string;
-  events?: MotionEventMarker[];
-}
-
-export interface SavedPosePreset {
-  id: string;
-  name: string;
-  /** Map of boneName -> [rxDeg, ryDeg, rzDeg] character-space delta angles */
-  bones: Record<string, BonePoseAngles>;
-  /** Vertical hips bounce offset in model units */
-  hipsOffsetY: number;
-  /** Captured studio 3D thumbnail data URL */
-  thumbnailDataUrl?: string;
-  createdAt: string;
 }
 
 export type MechanismKind = 'hinge' | 'slider';
@@ -780,16 +609,6 @@ export type CompleteCondition =
   | 'completeCourse';
 
 export type TemplateCategory = 'all' | 'worlds' | 'stories' | 'vehicles';
-
-export type CreatureBodyId =
-  | 'Skunk'
-  | 'Porcupine'
-  | 'Mole Rat'
-  | 'Vulture'
-  | 'Duckling'
-  | 'Squirrel'
-  | 'Badger'
-  | 'Owl';
 
 export type CritterAttitude = 'none' | 'teasing' | 'nervous' | 'grumpy';
 export type CritterWarmTrigger = 'nearbyPower' | 'allBuddies' | 'flagSet';
@@ -2244,178 +2063,7 @@ export interface ChatDisplaySettings {
   panelCompact: boolean;
 }
 
-export type InventoryItemCategory =
-  | 'tool'
-  | 'weapon'
-  | 'consumable'
-  | 'wearable'
-  | 'resource'
-  | 'material';
-export type ToolActionKind = 'sword' | 'axe' | 'fishingPole' | 'torch';
-export type WearSlot = 'head' | 'body' | 'accessory' | 'offhand';
-export type ObjectAttachBodyPart =
-  | 'rightHand'
-  | 'leftHand'
-  | 'head'
-  | 'chest'
-  | 'back'
-  | 'neck'
-  | 'hips'
-  | 'leftArm'
-  | 'rightArm'
-  | 'leftFoot'
-  | 'rightFoot'
-  | 'leftWing'
-  | 'rightWing'
-  | 'tail';
-export type ItemRarity = 'common' | 'uncommon' | 'rare' | 'epic' | 'legendary';
-export type PickupMeshKind =
-  | 'sword'
-  | 'axe'
-  | 'fishingPole'
-  | 'woodLog'
-  | 'fish'
-  | 'berries'
-  | 'herbs'
-  | 'mushroom'
-  | 'flower'
-  | 'potion'
-  | 'hat'
-  | 'cloak'
-  | 'armor'
-  | 'shield'
-  | 'amulet'
-  | 'torch'
-  | 'staff'
-  | 'scroll'
-  | 'stone'
-  | 'moss'
-  | 'bone'
-  | 'gem'
-  | 'blanket';
-
-export interface InventoryCustomStat {
-  label: string;
-  value: string;
-}
-
-export interface ItemMetadata {
-  power?: number;
-  durability?: number;
-  maxDurability?: number;
-  magic_effect?: string;
-  rarity?: ItemRarity;
-  weight?: number;
-  craftable?: boolean;
-  repairable?: boolean;
-  properties?: Record<string, string | number | boolean>;
-}
-
-export interface InventoryItemDef {
-  id: string;
-  name: string;
-  category: InventoryItemCategory;
-  customCategoryId?: string;
-  colorHex: string;
-  icon: string;
-  description: string;
-  lore?: string;
-  magicEffect?: string;
-  meshKind: PickupMeshKind;
-  customAssetId?: string;
-  attachBodyPart?: ObjectAttachBodyPart;
-  toolKind?: ToolActionKind;
-  handedness?: 'oneHand' | 'twoHand';
-  wearSlot?: WearSlot;
-  wearColorHex?: string;
-  blockReduction?: number;
-  healAmount?: number;
-  staminaAmount?: number;
-  magicAmount?: number;
-  attackBonus?: number;
-  defenseBonus?: number;
-  weaponRange?: number;
-  speedBonus?: number;
-  maxHealthBonus?: number;
-  metadata?: ItemMetadata;
-  customStats?: InventoryCustomStat[];
-}
-
-export type InventoryStatProfile =
-  | 'auto'
-  | 'weapon'
-  | 'apparel'
-  | 'consumable'
-  | 'material'
-  | 'magic'
-  | 'custom';
-
-export interface InventoryCategoryConfig {
-  id: string;
-  label: string;
-  matchCategories: InventoryItemCategory[];
-  statProfile: InventoryStatProfile;
-  statLabels?: {
-    primary?: string;
-    secondary?: string;
-    tertiary?: string;
-  };
-}
-
-export type WorldCollectibleScatterKind =
-  | 'mushroom'
-  | 'berryBush'
-  | 'fern'
-  | 'broadleaf'
-  | 'flower'
-  | 'rock';
-
-export interface WorldCollectibleRule {
-  scatterKind: WorldCollectibleScatterKind;
-  label: string;
-  enabled: boolean;
-  itemId: string;
-  qty: number;
-  collectMethod: 'interact' | 'walkOver';
-}
-
-export interface GameInventoryConfig {
-  panelTitle: string;
-  panelSubtitle: string;
-  toggleKey: string;
-  allowMixWorkbench: boolean;
-  mixTitle: string;
-  mixButtonLabel: string;
-  categories: InventoryCategoryConfig[];
-  worldCollectibles: WorldCollectibleRule[];
-}
-
-export type CraftingRecipeCategory = 'weapon' | 'consumable' | 'wearable' | 'tool' | 'alchemy';
-
-export interface CraftingRecipe {
-  id: string;
-  title: string;
-  ingredientA: string;
-  ingredientB: string;
-  resultItemId: string;
-  resultQty: number;
-  category?: CraftingRecipeCategory;
-}
-
-export interface InventoryStack {
-  itemId: string;
-  qty: number;
-  durability?: number;
-  maxDurability?: number;
-}
-
-export interface HeroEquipment {
-  heldItemId: string | null;
-  offhandItemId?: string | null;
-  headItemId: string | null;
-  bodyItemId: string | null;
-  accessoryItemId: string | null;
-}
+export * from './inventory';
 
 export interface GameTemplate {
   id: string;
